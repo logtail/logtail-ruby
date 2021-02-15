@@ -147,7 +147,7 @@ module Logtail
         end
 
         # System context
-        hostname = Socket.gethostname&.force_encoding('UTF-8')
+        hostname = Socket.gethostname.force_encoding('UTF-8')
         pid = Process.pid
         system_context = Contexts::System.new(hostname: hostname, pid: pid)
         new_hash.merge!(system_context.to_hash)
