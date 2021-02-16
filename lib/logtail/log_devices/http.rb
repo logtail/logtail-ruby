@@ -17,8 +17,8 @@ module Logtail
     #
     # See {#initialize} for options and more details.
     class HTTP
-      LOGTAIL_STAGING_HOST = "logs-staging.logtail.com".freeze
-      LOGTAIL_PRODUCTION_HOST = "logs.logtail.com".freeze
+      LOGTAIL_STAGING_HOST = "in-staging.logtail.com".freeze
+      LOGTAIL_PRODUCTION_HOST = "in.logtail.com".freeze
       LOGTAIL_HOST = ENV['LOGTAIL_STAGING'] ? LOGTAIL_STAGING_HOST : LOGTAIL_PRODUCTION_HOST
       LOGTAIL_PORT = 443
       LOGTAIL_SCHEME = "https".freeze
