@@ -1,5 +1,6 @@
 require "socket"
 require "time"
+require "pathname"
 
 require "logtail/contexts"
 require "logtail/events"
@@ -43,9 +44,10 @@ module Logtail
     def to_hash(options = {})
       options ||= {}
       hash = {
-        :level => level,
-        :dt => formatted_dt,
-        :message => message
+        level: level,
+        dt: formatted_dt,
+        message: message,
+        context: {}
       }
 
       if !tags.nil? && tags.length > 0
@@ -59,6 +61,9 @@ module Logtail
       if !context_snapshot.nil? && context_snapshot.length > 0
         hash[:context] = context_snapshot
       end
+
+      hash[:context][:runtime] ||= {}
+      hash[:context][:runtime].merge!(current_runtime_context || {})
 
       if options[:only]
         hash.select do |key, _value|
@@ -105,6 +110,29 @@ module Logtail
         })
       rescue Exception
         nil
+      end
+
+      def current_runtime_context
+        index = caller_locations.rindex { |x| is_logtail_frame(x) }
+        frame = caller_locations[index + 1] unless index.nil?
+        return convert_to_runtime_context(frame) unless frame.nil?
+      end
+
+      def convert_to_runtime_context(frame)
+        {
+          file: relative_to_main_module(frame.absolute_path),
+          line: frame.lineno,
+          frame_label: frame.label,
+        }
+      end
+
+      def is_logtail_frame(frame)
+        frame.absolute_path.include? '/logtail-ruby/lib/logtail/'
+      end
+
+      def relative_to_main_module(path)
+        base = File.dirname(caller_locations[-1].absolute_path)
+        Pathname.new(path).relative_path_from(base).to_s
       end
   end
 end
