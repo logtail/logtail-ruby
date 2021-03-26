@@ -113,7 +113,7 @@ module Logtail
       end
 
       def current_runtime_context
-        index = caller_locations.rindex { |x| is_logtail_frame(x) }
+        index = caller_locations.rindex { |x| logtail_frame?(x) }
         frame = caller_locations[index + 1] unless index.nil?
         return convert_to_runtime_context(frame) unless frame.nil?
       end
@@ -126,12 +126,12 @@ module Logtail
         }
       end
 
-      def is_logtail_frame(frame)
+      def logtail_frame?(frame)
         frame.absolute_path.include? '/logtail-ruby/lib/logtail/'
       end
 
       def relative_to_main_module(path)
-        base = File.dirname(caller_locations[-1].absolute_path)
+        base = File.dirname(caller_locations.last.absolute_path)
         Pathname.new(path).relative_path_from(base).to_s
       end
   end
