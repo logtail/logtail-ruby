@@ -12,6 +12,7 @@ module Logtail
     BINARY_LIMIT_THRESHOLD = 1_000.freeze
     DT_PRECISION = 6.freeze
     MESSAGE_MAX_BYTES = 8192.freeze
+    LOGTAIL_GEM_REGEX = /\/logtail(?:-rails|-rack)?(?:-\d+(?:\.\d+)*)?\/lib\//.freeze
 
     attr_reader :context_snapshot, :event, :level, :message, :progname, :tags, :time
 
@@ -127,12 +128,12 @@ module Logtail
       end
 
       def logtail_frame?(frame)
-        return false if frame.absolute_path.nil? || current_gem_path.nil?
-        frame.absolute_path.start_with?(current_gem_path)
+        return false if frame.absolute_path.nil? || logtail_gem_paths.empty?
+        frame.absolute_path.start_with?(logtail_gem_paths)
       end
 
-      def current_gem_path
-        @current_gem_path ||= $LOAD_PATH.select { |path| __FILE__.start_with?(path) }.max_by(&:length)
+      def logtail_gem_paths
+        @logtail_gem_paths ||= $LOAD_PATH.select { |path| path.match(LOGTAIL_GEM_REGEX) }
       end
 
       def relative_to_main_module(path)
