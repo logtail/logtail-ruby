@@ -3,7 +3,7 @@ $LOAD_PATH.push File.expand_path("../lib", __FILE__)
 require "logtail/version"
 
 Gem::Specification.new do |spec|
-  spec.name          = "logtail-ruby"
+  spec.name          = "logtail"
   spec.version       = Logtail::VERSION
   spec.platform      = Gem::Platform::RUBY
   spec.authors       = ["Logtail"]
