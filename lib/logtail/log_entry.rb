@@ -127,13 +127,14 @@ module Logtail
       end
 
       def logtail_frame?(frame)
-        frame.absolute_path&.include?('/logtail-ruby/lib/logtail/')
+        return false if frame.absolute_path.nil?
+        frame.absolute_path.include?('/logtail-ruby/lib/logtail/')
       end
 
       def relative_to_main_module(path)
-        base = Pathname.new(File.dirname(caller_locations.last.absolute_path))
-        dest = Pathname.new(path)
-        dest.relative_path_from(base).to_s
+        base_file = caller_locations.last.absolute_path
+        base_path = Pathname.new(File.dirname(base_file || '/'))
+        Pathname.new(path).relative_path_from(base_path).to_s
       end
   end
 end
