@@ -133,7 +133,7 @@ module Logtail
       end
 
       def logtail_gem_paths
-        @logtail_gem_paths ||= $LOAD_PATH.select { |path| path.match(LOGTAIL_GEM_REGEX) }
+        @logtail_gem_paths ||= $LOAD_PATH.select { |path| path.match?(LOGTAIL_GEM_REGEX) }
       end
 
       def relative_to_main_module(path)
