@@ -128,8 +128,8 @@ module Logtail
 
       def logtail_frame?(frame)
         puts "-------"
-        p frame.class
-        p frame.methods
+        p frame.absolute_path.inspect
+        p frame.absolute_path.class
         puts "-------"
         # p frame&.absolute_path.inspect
         # p frame&.methods.inspect
