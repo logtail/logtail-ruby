@@ -127,7 +127,10 @@ module Logtail
       end
 
       def logtail_frame?(frame)
-        p frame.inspect
+        puts "-------"
+        p frame.class
+        p frame.methods
+        puts "-------"
         # p frame&.absolute_path.inspect
         # p frame&.methods.inspect
         frame.absolute_path.include? '/logtail-ruby/lib/logtail/'
