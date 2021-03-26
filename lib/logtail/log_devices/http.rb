@@ -36,7 +36,7 @@ module Logtail
       # you can drop the log messages instead by passing a {DroppingSizedQueue} via the
       # `:request_queue` option.
       #
-      # @param api_key [String] The API key provided to you after you add your application to
+      # @param source_token [String] The API key provided to you after you add your application to
       #   [Logtail](https://logtail.com).
       # @param [Hash] options the options to create a HTTP log device with.
       # @option attributes [Symbol] :batch_size (1000) Determines the maximum of log lines in
@@ -64,13 +64,13 @@ module Logtail
       #   The default is set via {LOGTAIL_HOST}.
       #
       # @example Basic usage
-      #   Logtail::Logger.new(Logtail::LogDevices::HTTP.new("my_logtail_api_key"))
+      #   Logtail::Logger.new(Logtail::LogDevices::HTTP.new("my_logtail_source_token"))
       #
       # @example Apply back pressure instead of dropping messages
-      #   http_log_device = Logtail::LogDevices::HTTP.new("my_logtail_api_key", request_queue: SizedQueue.new(25))
+      #   http_log_device = Logtail::LogDevices::HTTP.new("my_logtail_source_token", request_queue: SizedQueue.new(25))
       #   Logtail::Logger.new(http_log_device)
-      def initialize(api_key, options = {})
-        @api_key = api_key || raise(ArgumentError.new("The api_key parameter cannot be blank"))
+      def initialize(source_token, options = {})
+        @source_token = source_token || raise(ArgumentError.new("The source_token parameter cannot be blank"))
         @logtail_host = options[:logtail_host] || ENV['LOGTAIL_HOST'] || LOGTAIL_HOST
         @logtail_port = options[:logtail_port] || ENV['LOGTAIL_PORT'] || LOGTAIL_PORT
         @logtail_scheme = options[:logtail_scheme] || ENV['LOGTAIL_SCHEME'] || LOGTAIL_SCHEME
@@ -168,7 +168,7 @@ MESSAGE
         end
 
         raise <<-MESSAGE
-        
+
 Log delivery failed! No request was made.
 
 You can enable internal debug logging with the following:
@@ -361,7 +361,7 @@ MESSAGE
 
         # Builds the `Authorization` header value for HTTP delivery to the Logtail API.
         def authorization_payload
-          "Bearer #{@api_key}"
+          "Bearer #{@source_token}"
         end
     end
   end

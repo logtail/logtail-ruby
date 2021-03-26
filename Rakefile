@@ -14,7 +14,7 @@ def puts_with_level(message, level = :info)
   end
 end
 
-task :test_the_pipes, [:api_key] do |t, args|
+task :test_the_pipes, [:source_token] do |t, args|
   support_email = "support@logtail.com"
   # Do not modify below this line. It's important to keep the `Logtail::Logger`
   # because it provides an API for logging structured data and capturing context.
@@ -26,7 +26,7 @@ task :test_the_pipes, [:api_key] do |t, args|
 
   current_context = Logtail::CurrentContext.instance.snapshot
   entry = Logtail::LogEntry.new(:info, Time.now, nil, "Testing the pipes (click the inspect icon to view more details)", current_context, nil)
-  http_device = Logtail::LogDevices::HTTP.new(args.api_key, flush_continuously: false)
+  http_device = Logtail::LogDevices::HTTP.new(args.source_token, flush_continuously: false)
   response = http_device.deliver_one(entry)
   if response.is_a?(Exception)
     message = <<~HEREDOC
