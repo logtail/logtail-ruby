@@ -127,8 +127,12 @@ module Logtail
       end
 
       def logtail_frame?(frame)
-        return false if frame.absolute_path.nil?
-        frame.absolute_path.include?('/logtail-ruby/lib/logtail/')
+        return false if frame.absolute_path.nil? || current_gem_path.nil?
+        frame.absolute_path.start_with?(current_gem_path)
+      end
+
+      def current_gem_path
+        @current_gem_path ||= $LOAD_PATH.filter { |path| __FILE__.start_with?(path) }.max_by(&:length)
       end
 
       def relative_to_main_module(path)
