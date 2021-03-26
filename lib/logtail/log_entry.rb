@@ -131,8 +131,9 @@ module Logtail
       end
 
       def relative_to_main_module(path)
-        base = File.dirname(caller_locations.last.absolute_path)
-        Pathname.new(path).relative_path_from(base).to_s
+        base = Pathname.new(File.dirname(caller_locations.last.absolute_path))
+        dest = Pathname.new(path)
+        dest.relative_path_from(base).to_s
       end
   end
 end
