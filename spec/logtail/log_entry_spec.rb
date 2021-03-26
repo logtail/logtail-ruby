@@ -22,6 +22,8 @@ describe Logtail::LogEntry do
 
   describe "#to_hash" do
     it "should include runtime context information" do
+      $:.unshift(File.expand_path(__dir__ + '/../../lib'))
+
       log_entry = described_class.new("INFO", time, nil, "log message", {}, {})
       hash = log_entry.to_hash
       expect(hash[:context]).to_not be_nil
