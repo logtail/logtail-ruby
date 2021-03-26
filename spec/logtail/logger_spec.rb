@@ -161,7 +161,7 @@ describe Logtail::Logger do
     end
 
     context "with the HTTP log device" do
-      let(:io) { Logtail::LogDevices::HTTP.new("my_key") }
+      let(:io) { Logtail::LogDevices::HTTP.new("my_source_token") }
 
       it "should use the PassThroughFormatter" do
         expect(logger.formatter).to be_kind_of(Logtail::Logger::PassThroughFormatter)
@@ -189,7 +189,7 @@ describe Logtail::Logger do
 
   describe "#formatter=" do
     it "should not allow changing the formatter when the device is HTTP" do
-      http_device = Logtail::LogDevices::HTTP.new("api_key")
+      http_device = Logtail::LogDevices::HTTP.new("source_token")
       logger = Logtail::Logger.new(http_device)
       expect { logger.formatter = ::Logger::Formatter.new }.to raise_error(ArgumentError)
     end

@@ -135,7 +135,7 @@ module Logtail
     #   logger = Logtail::Logger.new(STDOUT)
     #
     # @example Logging to the Logtail HTTP device
-    #   http_device = Logtail::LogDevices::HTTP.new("my-logtail-api-key")
+    #   http_device = Logtail::LogDevices::HTTP.new("my-logtail-source-token")
     #   logger = Logtail::Logger.new(http_device)
     #
     # @example Logging to a file (with rotation)
@@ -143,7 +143,7 @@ module Logtail
     #   logger = Logtail::Logger.new(file_device)
     #
     # @example Logging to a file and the Logtail HTTP device (multiple log devices)
-    #   http_device = Logtail::LogDevices::HTTP.new("my-logtail-api-key")
+    #   http_device = Logtail::LogDevices::HTTP.new("my-logtail-source-token")
     #   file_logger = ::Logger.new("path/to/file.log")
     #   logger = Logtail::Logger.new(http_device, file_logger)
     def initialize(*io_devices_and_loggers)
