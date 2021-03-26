@@ -44,10 +44,9 @@ module Logtail
     def to_hash(options = {})
       options ||= {}
       hash = {
-        level: level,
-        dt: formatted_dt,
-        message: message,
-        context: {}
+        :level => level,
+        :dt => formatted_dt,
+        :message => message,
       }
 
       if !tags.nil? && tags.length > 0
@@ -62,6 +61,7 @@ module Logtail
         hash[:context] = context_snapshot
       end
 
+      hash[:context] ||= {}
       hash[:context][:runtime] ||= {}
       hash[:context][:runtime].merge!(current_runtime_context || {})
 
@@ -132,7 +132,7 @@ module Logtail
       end
 
       def current_gem_path
-        @current_gem_path ||= $LOAD_PATH.filter { |path| __FILE__.start_with?(path) }.max_by(&:length)
+        @current_gem_path ||= $LOAD_PATH.select { |path| __FILE__.start_with?(path) }.max_by(&:length)
       end
 
       def relative_to_main_module(path)
