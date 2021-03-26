@@ -12,7 +12,7 @@ module Logtail
     BINARY_LIMIT_THRESHOLD = 1_000.freeze
     DT_PRECISION = 6.freeze
     MESSAGE_MAX_BYTES = 8192.freeze
-    LOGTAIL_GEM_REGEX = /\/logtail(?:-rails|-rack)?(?:-\d+(?:\.\d+)*)?\/lib\//.freeze
+    LOGTAIL_GEM_REGEX = /\/logtail(?:-rails|-rack)?(?:-\d+(?:\.\d+)*)?\/lib$/.freeze
 
     attr_reader :context_snapshot, :event, :level, :message, :progname, :tags, :time
 
