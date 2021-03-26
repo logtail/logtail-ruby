@@ -19,4 +19,18 @@ describe Logtail::LogEntry do
       expect(msgpack).to start_with("\x85\xA5level\xA4INFO\xA2dt\xBB2016-09-01T12:00:00.000000Z".force_encoding("ASCII-8BIT"))
     end
   end
+
+  describe "#to_hash" do
+    it "should include runtime context information" do
+      $:.unshift(File.expand_path(__dir__ + '/../../lib'))
+
+      log_entry = described_class.new("INFO", time, nil, "log message", {}, {})
+      hash = log_entry.to_hash
+      expect(hash[:context]).to_not be_nil
+      expect(hash[:context][:runtime]).to_not be_nil
+      expect(hash[:context][:runtime][:file]).to_not be_nil
+      expect(hash[:context][:runtime][:line]).to_not be_nil
+      expect(hash[:context][:runtime][:frame_label]).to_not be_nil
+    end
+  end
 end

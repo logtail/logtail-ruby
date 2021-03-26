@@ -102,7 +102,7 @@ describe Logtail::LogDevices::HTTP do
       request_queue = http.instance_variable_get(:@request_queue)
       request_attempt = request_queue.deq
       expect(request_attempt.request).to be_kind_of(Net::HTTP::Post)
-      expect(request_attempt.request.body).to start_with("\x92\x83\xA5level\xA4INFO\xA2dt\xBB2016-09-01T12:00:00.000000Z\xA7message\xB2test log message 1".force_encoding("ASCII-8BIT"))
+      expect(request_attempt.request.body).to start_with("\x92\x84\xA5level\xA4INFO\xA2dt\xBB2016-09-01T12:00:00.000000Z\xA7message\xB2test log message 1".force_encoding("ASCII-8BIT"))
 
       message_queue = http.instance_variable_get(:@msg_queue)
       expect(message_queue.size).to eq(0)
@@ -127,7 +127,7 @@ describe Logtail::LogDevices::HTTP do
     it "should deliver requests on an interval" do
       stub = stub_request(:post, "https://in.logtail.com/").
         with(
-          :body => start_with("\x92\x83\xA5level\xA4INFO\xA2dt\xBB2016-09-01T12:00:00.000000Z\xA7message\xB2test log message 1".force_encoding("ASCII-8BIT")),
+          :body => start_with("\x92\x84\xA5level\xA4INFO\xA2dt\xBB2016-09-01T12:00:00.000000Z\xA7message\xB2test log message 1".force_encoding("ASCII-8BIT")),
           :headers => {
             'Authorization' => 'Bearer MYKEY',
             'Content-Type' => 'application/msgpack',

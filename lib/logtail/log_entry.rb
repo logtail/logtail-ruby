@@ -1,5 +1,6 @@
 require "socket"
 require "time"
+require "pathname"
 
 require "logtail/contexts"
 require "logtail/events"
@@ -11,6 +12,7 @@ module Logtail
     BINARY_LIMIT_THRESHOLD = 1_000.freeze
     DT_PRECISION = 6.freeze
     MESSAGE_MAX_BYTES = 8192.freeze
+    LOGTAIL_GEM_REGEX = /\/logtail(?:-ruby|-rails|-rack)?(?:-\d+(?:\.\d+)*)?\/lib$/.freeze
 
     attr_reader :context_snapshot, :event, :level, :message, :progname, :tags, :time
 
@@ -45,7 +47,7 @@ module Logtail
       hash = {
         :level => level,
         :dt => formatted_dt,
-        :message => message
+        :message => message,
       }
 
       if !tags.nil? && tags.length > 0
@@ -59,6 +61,10 @@ module Logtail
       if !context_snapshot.nil? && context_snapshot.length > 0
         hash[:context] = context_snapshot
       end
+
+      hash[:context] ||= {}
+      hash[:context][:runtime] ||= {}
+      hash[:context][:runtime].merge!(current_runtime_context || {})
 
       if options[:only]
         hash.select do |key, _value|
@@ -105,6 +111,35 @@ module Logtail
         })
       rescue Exception
         nil
+      end
+
+      def current_runtime_context
+        index = caller_locations.rindex { |x| logtail_frame?(x) }
+        frame = caller_locations[index + 1] unless index.nil?
+        return convert_to_runtime_context(frame) unless frame.nil?
+      end
+
+      def convert_to_runtime_context(frame)
+        {
+          file: relative_to_main_module(frame.absolute_path),
+          line: frame.lineno,
+          frame_label: frame.label,
+        }
+      end
+
+      def logtail_frame?(frame)
+        return false if frame.absolute_path.nil? || logtail_gem_paths.empty?
+        logtail_gem_paths.any? { |path| frame.absolute_path.start_with?(path) }
+      end
+
+      def logtail_gem_paths
+        @logtail_gem_paths ||= $LOAD_PATH.select { |path| path.match(LOGTAIL_GEM_REGEX) }
+      end
+
+      def relative_to_main_module(path)
+        base_file = caller_locations.last.absolute_path
+        base_path = Pathname.new(File.dirname(base_file || '/'))
+        Pathname.new(path).relative_path_from(base_path).to_s
       end
   end
 end
