@@ -201,8 +201,18 @@ MESSAGE
           req['Authorization'] = authorization_payload
           req['Content-Type'] = CONTENT_TYPE
           req['User-Agent'] = USER_AGENT
-          req.body = msgs.to_msgpack
+          req.body = msgs.map { |msg| force_utf8_encoding(msg.to_hash) }.to_msgpack
           req
+        end
+
+        def force_utf8_encoding(data)
+          if data.respond_to?(:force_encoding)
+            data.dup.force_encoding('UTF-8')
+          elsif data.respond_to?(:transform_values)
+            data.transform_values { |val| force_utf8_encoding(val) }
+          else
+            data
+          end
         end
 
         # Flushes the message buffer asynchronously. The reason we provide this
