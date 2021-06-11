@@ -12,7 +12,7 @@ module Logtail
     BINARY_LIMIT_THRESHOLD = 1_000.freeze
     DT_PRECISION = 6.freeze
     MESSAGE_MAX_BYTES = 8192.freeze
-    LOGGER_FILE = '/logtail/logger.rb'.freeze
+    LOGGER_FILE_REGEX = /\/logtail\/logger\.rb$/.freeze
 
     attr_reader :context_snapshot, :event, :level, :message, :progname, :tags, :time
 
@@ -115,7 +115,7 @@ module Logtail
       end
 
       def current_runtime_context
-        last_logger_invocation_index = caller_locations.rindex { |frame| frame.absolute_path.end_with?(LOGGER_FILE) }
+        last_logger_invocation_index = caller_locations.rindex { |frame| frame.absolute_path.match(LOGGER_FILE_REGEX) }
         return {} if last_logger_invocation_index.nil?
 
         calling_frame_index = last_logger_invocation_index + 1
