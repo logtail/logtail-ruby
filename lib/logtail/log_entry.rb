@@ -115,7 +115,7 @@ module Logtail
       end
 
       def current_runtime_context
-        last_logger_invocation_index = caller_locations.rindex { |frame| frame.absolute_path.ends_with?(LOGGER_FILE) }
+        last_logger_invocation_index = caller_locations.rindex { |frame| frame.absolute_path.end_with?(LOGGER_FILE) }
         return {} if last_logger_invocation_index.nil?
 
         calling_frame_index = last_logger_invocation_index + 1
