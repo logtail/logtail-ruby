@@ -12,7 +12,7 @@ module Logtail
     BINARY_LIMIT_THRESHOLD = 1_000.freeze
     DT_PRECISION = 6.freeze
     MESSAGE_MAX_BYTES = 8192.freeze
-    LOGTAIL_GEM_REGEX = /\/logtail(?:-ruby|-rails|-rack)?(?:-\d+(?:\.\d+)*)?\/lib$/.freeze
+    LOGGER_FILE = '/logtail/logger.rb'.freeze
 
     attr_reader :context_snapshot, :event, :level, :message, :progname, :tags, :time
 
@@ -39,6 +39,7 @@ module Logtail
       @tags = options[:tags]
       @context_snapshot = context_snapshot
       @event = event
+      @runtime_context = current_runtime_context || {}
     end
 
     # Builds a hash representation containing simple objects, suitable for serialization (JSON).
@@ -64,7 +65,7 @@ module Logtail
 
       hash[:context] ||= {}
       hash[:context][:runtime] ||= {}
-      hash[:context][:runtime].merge!(current_runtime_context || {})
+      hash[:context][:runtime].merge!(@runtime_context)
 
       if options[:only]
         hash.select do |key, _value|
@@ -114,32 +115,40 @@ module Logtail
       end
 
       def current_runtime_context
-        index = caller_locations.rindex { |x| logtail_frame?(x) }
-        frame = caller_locations[index + 1] unless index.nil?
-        return convert_to_runtime_context(frame) unless frame.nil?
+        last_logger_invocation_index = caller_locations.rindex { |frame| logtail_logger_frame?(frame) }
+        return {} if last_logger_invocation_index.nil?
+
+        calling_frame_index = last_logger_invocation_index + 1
+        frame = caller_locations[calling_frame_index]
+
+        return convert_to_runtime_context(frame)
       end
 
       def convert_to_runtime_context(frame)
         {
-          file: relative_to_main_module(frame.absolute_path),
+          file: path_relative_to_app_root(frame),
           line: frame.lineno,
           frame_label: frame.label,
         }
       end
 
-      def logtail_frame?(frame)
-        return false if frame.absolute_path.nil? || logtail_gem_paths.empty?
-        logtail_gem_paths.any? { |path| frame.absolute_path.start_with?(path) }
+      def logtail_logger_frame?(frame)
+        !frame.absolute_path.nil? && frame.absolute_path.end_with?(LOGGER_FILE)
       end
 
-      def logtail_gem_paths
-        @logtail_gem_paths ||= $LOAD_PATH.select { |path| path.match(LOGTAIL_GEM_REGEX) }
+      def path_relative_to_app_root(frame)
+        Pathname.new(frame.absolute_path).relative_path_from(root_path).to_s
       end
 
-      def relative_to_main_module(path)
-        base_file = caller_locations.last.absolute_path
-        base_path = Pathname.new(File.dirname(base_file || '/'))
-        Pathname.new(path).relative_path_from(base_path).to_s
+      def root_path
+        if Object.const_defined?('Rails')
+          Rails.root.to_s
+        elsif Object.const_defined?('Rack::Directory')
+          Rack::Directory.new('').root
+        else
+          base_file = caller_locations.last.absolute_path
+          Pathname.new(File.dirname(base_file || '/'))
+        end
       end
   end
 end
