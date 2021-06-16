@@ -142,9 +142,9 @@ module Logtail
 
       def root_path
         if Object.const_defined?('Rails')
-          Rails.root.to_s
+          Rails.root
         elsif Object.const_defined?('Rack::Directory')
-          Rack::Directory.new('').root
+          Pathname.new(Rack::Directory.new('').root)
         else
           base_file = caller_locations.last.absolute_path
           Pathname.new(File.dirname(base_file || '/'))
