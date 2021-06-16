@@ -34,14 +34,13 @@ module Logtail
         def build_log_entry(severity, time, progname, logged_obj)
           context_snapshot = CurrentContext.instance.snapshot
           level = SEVERITY_MAP.fetch(severity)
-          tags = extract_active_support_tagged_logging_tags
+          tags = extract_active_support_tagged_logging_tags.clone
 
           if logged_obj.is_a?(Event)
             LogEntry.new(level, time, progname, logged_obj.message, context_snapshot, logged_obj,
                          tags: tags)
           elsif logged_obj.is_a?(Hash)
             # Extract the tags
-            tags = tags.clone
             tags.push(logged_obj.delete(:tag)) if logged_obj.key?(:tag)
             tags.concat(logged_obj.delete(:tags)) if logged_obj.key?(:tags)
             tags.uniq!
