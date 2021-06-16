@@ -55,7 +55,8 @@ module Logtail
 
         # Because of all the crazy ways Rails has attempted tags, we need this crazy method.
         def extract_active_support_tagged_logging_tags
-          Thread.current[:activesupport_tagged_logging_tags] ||
+          @current_tags ||
+            Thread.current[:activesupport_tagged_logging_tags] ||
             Thread.current[tagged_logging_object_key_name] ||
             EMPTY_ARRAY
         end
