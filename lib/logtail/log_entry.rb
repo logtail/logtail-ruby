@@ -120,6 +120,7 @@ module Logtail
 
         calling_frame_index = last_logger_invocation_index + 1
         frame = caller_locations[calling_frame_index]
+        return {} if frame.nil?
 
         return convert_to_runtime_context(frame)
       end
@@ -138,6 +139,8 @@ module Logtail
 
       def path_relative_to_app_root(frame)
         Pathname.new(frame.absolute_path).relative_path_from(root_path).to_s
+      rescue
+        frame.absolute_path
       end
 
       def root_path
