@@ -30,6 +30,7 @@ describe Logtail::LogEntry do
       expect(hash[:context][:runtime][:file]).to end_with('/spec/logtail/log_entry_spec.rb')
       expect(hash[:context][:runtime][:line]).to be(25)
       expect(hash[:context][:runtime][:frame_label]).to_not be_nil
+      expect(hash[:context][:runtime][:frame_label].encoding.to_s).to eq('UTF-8')
     end
   end
 end
