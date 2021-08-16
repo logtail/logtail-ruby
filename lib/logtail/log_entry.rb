@@ -133,7 +133,6 @@ module Logtail
         }
       end
 
-
       def logtail_logger_frame?(frame)
         !frame.absolute_path.nil? && frame.absolute_path.end_with?(LOGGER_FILE)
       end
