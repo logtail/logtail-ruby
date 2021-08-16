@@ -129,7 +129,7 @@ module Logtail
         {
           file: path_relative_to_app_root(frame),
           line: frame.lineno,
-          frame_label: frame.label,
+          frame_label: frame.label.dup.force_encoding('UTF-8'),
         }
       end
 
