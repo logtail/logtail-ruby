@@ -6,7 +6,7 @@
 [![Gem Version](https://badge.fury.io/rb/logtail-ruby.svg)](https://badge.fury.io/rb/logtail-ruby)
 [![Build Status](https://github.com/logtail/logtail-ruby/workflows/build/badge.svg)](https://github.com/logtail/logtail-ruby/actions?query=workflow%3Abuild)
 
-Collect logs directly from your Ruby projects. For Rails
+Collect logs directly from your Ruby projects. To start logging Ruby on Rails projects explore the [Logtail Rails library](https://github.com/logtail/logtail-ruby-rails).
 
 [Logtail](https://betterstack.com/logtail) is a hosted service that centralizes all of your logs into one place. Allowing for analysis, correlation and filtering with SQL. Actionable Grafana dashboards and collaboration come built-in. Logtail works with [any language or platform and any data source](https://docs.logtail.com/). 
 
@@ -38,7 +38,7 @@ To help you get started with using Logtail in your Ruby projects, we have prepar
 
 ## Download and install the example project
 
-You can download the [example project](https://github.com/logtail/logtail-python/tree/master/example-project) from GitHub directly or you can clone it to a select directory. Make sure you are in the projects directory and run the following command:
+You can download the [example project](https://github.com/logtail/logtail-ruby/tree/main/example-project) from GitHub directly or you can clone it to a select directory. Make sure you are in the projects directory and run the following command:
 
 ```bash
 bundle install
@@ -60,7 +60,7 @@ This will create a total of 5 different logs, each corresponding to a different 
 
 ## Explore how example project works
  
-Learn how to setup Ruby logging by exploring the workings of the [example project](https://github.com/logtail/logtail-python/tree/master/example-project) in detail. 
+Learn how to setup Ruby logging by exploring the workings of the [example project](https://github.com/logtail/logtail-ruby/tree/main/example-project) in detail. 
  
 ---
  
