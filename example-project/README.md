@@ -16,7 +16,7 @@ Alternatively, add `gem "logtail"` to your `Gemfile` manually and then run `bund
 
  ## Run the example project
  
- Replace `<source-token>` with your actual source token in the `main.rb` file. You can find your source token by going to logtail.com -> sources -> edit.
+ Replace `<source-token>` with your actual source token in the `main.rb` file. You can find your source token by going to _logtail.com -> sources -> edit_.
  
  To run the example application, run the following command adding your source token:
 
@@ -38,9 +38,7 @@ The `logger` instance we created in the installation section is used to send l
 
 ## Logging example
 
-In this example, we will send two logs - DEBUG and INFO
-
-### Ruby
+In this example, we will send two logs - **DEBUG** and **INFO**
 
 ```ruby
 # Send debug logs messages using the debug() method
@@ -48,16 +46,6 @@ logger.debug("Logtail is ready!")
 
 # Send informative messages about interesting events using the info() method
 logger.info("I am using Logtail!")
-```
-
-### Ruby on Rails
-
-```ruby
-# Send debug logs messages using the debug() method
-Rails.logger.debug("Logtail is ready!")
-
-# Send informative messages about interesting events using the info() method
-Rails.logger.info("I am using Logtail!")
 ```
 
 This will create the following output:
