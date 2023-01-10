@@ -41,11 +41,13 @@ module Logtail
                          tags: tags)
           elsif logged_obj.is_a?(Hash)
             # Extract the tags
-            tags.push(logged_obj.delete(:tag)) if logged_obj.key?(:tag)
-            tags.concat(logged_obj.delete(:tags)) if logged_obj.key?(:tags)
+            tags.push(logged_obj[:tag]) if logged_obj.key?(:tag)
+            tags.concat(logged_obj[:tags]) if logged_obj.key?(:tags)
             tags.uniq!
 
-            message = logged_obj.delete(:message)
+            message = logged_obj[:message]
+
+            logged_obj = logged_obj.select { |k, _| ![:message, :tag, :tags].include?(k) }
 
             LogEntry.new(level, time, progname, message, context_snapshot, logged_obj, tags: tags)
           else
