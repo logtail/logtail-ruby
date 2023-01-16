@@ -78,6 +78,16 @@ describe Logtail::Logger do
       expect(io.string).to eq("")
     end
 
+    it "should not lose message when logging hashes with multiple io devices" do
+      io1 = StringIO.new
+      io2 = StringIO.new
+      logger = Logtail::Logger.new(io1, io2)
+      message = {message: "payment rejected", payment_rejected: {customer_id: "abcde1234", amount: 100}}
+      logger.info(message)
+      expect(io1.string).to include("payment rejected")
+      expect(io2.string).to include("payment rejected")
+    end
+
     context "with the AugmentedFormatter" do
       before(:each) { logger.formatter = Logtail::Logger::AugmentedFormatter.new }
 
