@@ -22,3 +22,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 ## [0.1.7] - 2021-08-16
 
 - Fixed runtime context's frame label encoding.
+
+## [0.1.8] - 2023-01-16
+
+- Fix issue where message is lost when logging hashes with multiple IO devices (thanks @olivier-thatch!)
