@@ -37,6 +37,6 @@ logger.warn(
 logger.error("Oops! An error occurred!")
 
 # Send messages about fatal events that caused the app to crash using the fatal() method
-logger.fatal("Application crash! Needs to be fixed ASP!")
+logger.fatal("Application crash! Needs to be fixed ASAP!")
 
 puts "All done! You can check your logs now."
