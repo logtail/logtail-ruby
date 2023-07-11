@@ -21,7 +21,7 @@ Alternatively, add `gem "logtail"` to your `Gemfile` manually and then run `bund
  To run the example application, run the following command adding your source token:
 
 ```bash
-ruby main.rb <source-token>
+bundle exec ruby main.rb <source-token>
 ```
 
 This will create a total of 5 different logs, each corresponding to a different log level. You can review these logs in Logtail.

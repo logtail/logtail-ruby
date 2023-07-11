@@ -51,7 +51,7 @@ This will install all dependencies listed in the `Gemfile.lock` file.
  To run the example application, run the following command:
 
 ```bash
-ruby main.rb <source-token>
+bundle exec ruby main.rb <source-token>
 ```
 
 *Don't forget to replace `<source-token>` with your actual source token which you can find by going to logtail.com -> sources -> edit.*
