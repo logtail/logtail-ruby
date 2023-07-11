@@ -8,7 +8,7 @@ require "logtail"
 
 # Check for program arguments
 if ARGV.length != 1
-    puts "Program needs source token to run. Run the program as followed\nruby main.rb <source-token>"
+    puts "Program needs source token to run. Run the program as followed\nbundle exec ruby main.rb <source-token>"
     exit
 end
 # Create logger
