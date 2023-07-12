@@ -19,8 +19,10 @@ jobs:
           - 2.4.10
           - 2.3.8
           - 2.2.10
+          - jruby-9.4.3.0
           - jruby-9.2.14.0
-          - truffleruby-21.0.0
+          - truffleruby-23.0.0
+          - truffleruby-22.1.0
 
     steps:
       - uses: actions/checkout@v2
