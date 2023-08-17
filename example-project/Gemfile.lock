@@ -1,9 +1,9 @@
 GEM
   remote: https://rubygems.org/
   specs:
-    logtail (0.1.9)
+    logtail (0.1.11)
       msgpack (~> 1.0)
-    msgpack (1.7.1)
+    msgpack (1.7.2)
 
 PLATFORMS
   ruby
