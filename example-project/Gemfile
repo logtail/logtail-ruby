@@ -1,2 +1,2 @@
 source 'https://rubygems.org'
-gem "logtail"
+gem "logtail", "~> 0.1.12"
