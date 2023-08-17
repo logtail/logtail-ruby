@@ -46,7 +46,7 @@ module Logtail
     # See {Logtail::LogEntry} for available attributes of the block parameter.
     #
     # @example Rails
-    #   config.logtail.filter_sent_to_better_stack { |log_entry| log_entry.context_snapshot[:http][:path].start_with?('_') }
+    #   config.logtail.filter_sent_to_better_stack { |log_entry| log_entry.context_snapshot[:http][:path].start_with?('/_') }
     # @example Everything else
     #   Logtail.config.filter_sent_to_better_stack { |log_entry| log_entry.message.include?('IGNORE') }
     def filter_sent_to_better_stack(&block)
