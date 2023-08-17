@@ -15,6 +15,9 @@ end
 http_device = Logtail::LogDevices::HTTP.new(ARGV[0])
 logger = Logtail::Logger.new(http_device)
 
+# Filter logs that shouldn't be sent to Better Stack, see {Logtail::LogEntry} for available attributes
+Logtail.config.filter_sent_to_better_stack { |log_entry| log_entry.message.include?("DO_NOT_SEND") }
+
 # LOGGING
 
 # Send debug logs messages using the debug() method
@@ -32,6 +35,9 @@ logger.warn(
         price: 100.00
     }
 )
+
+# Some messages can be filtered, see {Logtail::Config#filter_sent_to_better_stack} call above
+logger.info("This message will not be sent to Better Stack because it contains 'DO_NOT_SEND'")
 
 # Send error messages using the error() method
 logger.error("Oops! An error occurred!")

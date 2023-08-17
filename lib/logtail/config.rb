@@ -32,6 +32,28 @@ module Logtail
 
     attr_writer :http_body_limit
 
+    # Whether a particular {Logtail::LogEntry} should be sent to Better Stack
+    def send_to_better_stack?(log_entry)
+      !@better_stack_filters&.any? { |blocker| blocker.call(log_entry) }
+    rescue => e
+      debug { "Could not determine whether to send LogEntry to Better Stack (assumed yes): #{e}" }
+      true
+    end
+
+    # This allows filtering logs that are sent to Better Stack. Can be called multiple times, all filters will
+    # be applied. If the passed block RETURNS TRUE for a particular LogEntry, it WILL NOT BE SENT to Better Stack.
+    #
+    # See {Logtail::LogEntry} for available attributes of the block parameter.
+    #
+    # @example Rails
+    #   config.logtail.filter_sent_to_better_stack { |log_entry| log_entry.context_snapshot[:http][:path].start_with?('_') }
+    # @example Everything else
+    #   Logtail.config.filter_sent_to_better_stack { |log_entry| log_entry.message.include?('IGNORE') }
+    def filter_sent_to_better_stack(&block)
+      @better_stack_filters ||= []
+      @better_stack_filters << -> (log_entry) { yield(log_entry) }
+    end
+
     # Convenience method for logging debug statements to the debug logger
     # set in this class.
     # @private

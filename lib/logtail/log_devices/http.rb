@@ -89,6 +89,8 @@ module Logtail
       # size is constricted by the Logtail API. The actual application limit is a multiple
       # of this. Hence the `@request_queue`.
       def write(msg)
+        return unless Logtail.config.send_to_better_stack?(msg)
+
         @msg_queue.enq(msg)
 
         # Lazily start flush threads to ensure threads are alive after forking processes.
