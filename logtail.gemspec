@@ -18,7 +18,7 @@ Gem::Specification.new do |spec|
   spec.metadata["homepage_uri"] = spec.homepage
   spec.metadata["source_code_uri"] = spec.homepage
 
-  spec.required_ruby_version = Gem::Requirement.new(">= 2.2.0")
+  spec.required_ruby_version = Gem::Requirement.new(">= 2.3")
 
   spec.files         = `git ls-files`.split("\n")
   spec.test_files    = `git ls-files -- {test,spec,features}/*`.split("\n")
