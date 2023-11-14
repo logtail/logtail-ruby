@@ -134,13 +134,13 @@ module Logtail
       end
 
       def logtail_logger_frame?(frame)
-        !frame.absolute_path.nil? && frame.absolute_path.end_with?(LOGGER_FILE)
+        !frame.path.nil? && frame.path.end_with?(LOGGER_FILE)
       end
 
       def path_relative_to_app_root(frame)
         Pathname.new(frame.absolute_path).relative_path_from(root_path).to_s
       rescue
-        frame.absolute_path
+        frame.absolute_path || frame.path
       end
 
       def root_path
