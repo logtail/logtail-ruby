@@ -11,7 +11,7 @@ Gem::Specification.new do |spec|
   spec.homepage      = "https://github.com/logtail/logtail-ruby"
   spec.license       = "ISC"
 
-  spec.summary       = "Query logs like you query your database. https://logtail.com"
+  spec.summary       = "This package has been deprecated. Please, switch to 'logtail' https://rubygems.org/gems/logtail"
 
   spec.metadata["bug_tracker_uri"] = "#{spec.homepage}/issues"
   spec.metadata["changelog_uri"] = "#{spec.homepage}/tree/master/CHANGELOG.md"
