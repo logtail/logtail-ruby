@@ -186,6 +186,8 @@ module Logtail
       Logtail::Config.instance.debug { "Logtail::Logger instantiated, level: #{level}, formatter: #{formatter.class}" }
 
       @initialized = true
+
+      self.warn("The 'logtail-ruby' package has been deprecated. Please, switch to 'logtail' https://rubygems.org/gems/logtail")
     end
 
     # Sets a new formatted on the logger.
