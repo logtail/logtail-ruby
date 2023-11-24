@@ -4,11 +4,15 @@ require "pathname"
 
 require "logtail/contexts"
 require "logtail/events"
+require "logtail/util/cleaner"
+require "logtail/sbo_filtering_config"
 
 module Logtail
   # Represents a new log entry into the log. This is an intermediary class between
   # `Logger` and the log device that you set it up with.
   class LogEntry #:nodoc:
+    extend Logtail::SboFilteringConfig
+
     BINARY_LIMIT_THRESHOLD = 1_000.freeze
     DT_PRECISION = 6.freeze
     MESSAGE_MAX_BYTES = 8192.freeze
@@ -78,6 +82,11 @@ module Logtail
       else
         hash
       end
+
+      Util::Cleaner.filter_logged_fields(
+        self.class.ignored_log_field_paths,
+        hash
+      )
     end
 
     def inspect
