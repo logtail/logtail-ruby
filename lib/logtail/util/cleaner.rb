@@ -3,11 +3,17 @@ module Logtail
     class Cleaner
       def self.filter_logged_fields(ignored_log_field_paths, log_hash)
         Array.wrap(ignored_log_field_paths).each do |field_path|
-          next if log_hash.dig(*field_path).nil?
+          next if path_missing?(log_hash, field_path)
           deep_key_remover log_hash, field_path.dup
         end
 
         log_hash
+      end
+
+      def self.path_missing?(log_hash, field_path)
+        log_hash.dig(*field_path).nil?
+      rescue
+        true
       end
 
       def self.deep_key_remover(log_hash, field_path)

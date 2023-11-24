@@ -71,22 +71,26 @@ module Logtail
       hash[:context][:runtime] ||= {}
       hash[:context][:runtime].merge!(@runtime_context)
 
-      if options[:only]
-        hash.select do |key, _value|
-          options[:only].include?(key)
-        end
-      elsif options[:except]
-        hash.select do |key, _value|
-          !options[:except].include?(key)
-        end
-      else
-        hash
-      end
-
       Util::Cleaner.filter_logged_fields(
         self.class.ignored_log_field_paths,
-        hash
+        apply_options(hash, options)
       )
+    end
+
+    def apply_options(hash, options)
+      if options[:only]
+        return hash.select do |key, _value|
+          options[:only].include?(key)
+        end
+      end
+
+      if options[:except]
+        return hash.select do |key, _value|
+          !options[:except].include?(key)
+        end
+      end
+
+      hash
     end
 
     def inspect
