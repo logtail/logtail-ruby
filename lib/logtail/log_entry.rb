@@ -4,15 +4,11 @@ require "pathname"
 
 require "logtail/contexts"
 require "logtail/events"
-require "logtail/util/cleaner"
-require "logtail/sbo_filtering_config"
 
 module Logtail
   # Represents a new log entry into the log. This is an intermediary class between
   # `Logger` and the log device that you set it up with.
   class LogEntry #:nodoc:
-    extend Logtail::SboFilteringConfig
-
     BINARY_LIMIT_THRESHOLD = 1_000.freeze
     DT_PRECISION = 6.freeze
     MESSAGE_MAX_BYTES = 8192.freeze
@@ -48,49 +44,12 @@ module Logtail
 
     # Builds a hash representation containing simple objects, suitable for serialization (JSON).
     def to_hash(options = {})
-      options ||= {}
-      hash = {
-        :level => level,
-        :dt => formatted_dt,
-        :message => message,
-      }
+      hash = compute_log_hash(options)
 
-      if !tags.nil? && tags.length > 0
-        hash[:tags] = tags
-      end
+      return hash unless defined?(ActiveSupport::ParameterFilter)
 
-      if !event.nil?
-        hash.merge!(event)
-      end
-
-      if !context_snapshot.nil? && context_snapshot.length > 0
-        hash[:context] = context_snapshot
-      end
-
-      hash[:context] ||= {}
-      hash[:context][:runtime] ||= {}
-      hash[:context][:runtime].merge!(@runtime_context)
-
-      Util::Cleaner.filter_logged_fields(
-        self.class.ignored_log_field_paths,
-        apply_options(hash, options)
-      )
-    end
-
-    def apply_options(hash, options)
-      if options[:only]
-        return hash.select do |key, _value|
-          options[:only].include?(key)
-        end
-      end
-
-      if options[:except]
-        return hash.select do |key, _value|
-          !options[:except].include?(key)
-        end
-      end
-
-      hash
+      parameter_filter = ActiveSupport::ParameterFilter.new(Rails.application.config.filter_parameters)
+      parameter_filter.filter(hash)
     end
 
     def inspect
@@ -111,60 +70,101 @@ module Logtail
     end
 
     private
-      def formatted_dt
-        @formatted_dt ||= time.iso8601(DT_PRECISION)
+
+    def compute_log_hash(options)
+      hash = {
+        :level => level,
+        :dt => formatted_dt,
+        :message => message,
+      }
+
+      if !tags.nil? && tags.length > 0
+        hash[:tags] = tags
       end
 
-      # Attempts to encode a non UTF-8 string into UTF-8, discarding invalid characters.
-      # If it fails, a nil is returned.
-      def encode_string(string)
-        string.encode('UTF-8', {
-          :invalid => :replace,
-          :undef   => :replace,
-          :replace => '?'
-        })
-      rescue Exception
-        nil
+      if !event.nil?
+        hash.merge!(event)
       end
 
-      def current_runtime_context
-        last_logger_invocation_index = caller_locations.rindex { |frame| logtail_logger_frame?(frame) }
-        return {} if last_logger_invocation_index.nil?
-
-        calling_frame_index = last_logger_invocation_index + 1
-        frame = caller_locations[calling_frame_index]
-        return {} if frame.nil?
-
-        return convert_to_runtime_context(frame)
+      if !context_snapshot.nil? && context_snapshot.length > 0
+        hash[:context] = context_snapshot
       end
 
-      def convert_to_runtime_context(frame)
-        {
-          file: path_relative_to_app_root(frame),
-          line: frame.lineno,
-          frame_label: frame.label.dup.force_encoding('UTF-8'),
-        }
-      end
+      hash[:context] ||= {}
 
-      def logtail_logger_frame?(frame)
-        !frame.path.nil? && frame.path.end_with?(LOGGER_FILE)
-      end
+      apply_options(hash, options)
+    end
 
-      def path_relative_to_app_root(frame)
-        Pathname.new(frame.absolute_path).relative_path_from(root_path).to_s
-      rescue
-        frame.absolute_path || frame.path
-      end
-
-      def root_path
-        if Object.const_defined?('Rails')
-          Rails.root
-        elsif Object.const_defined?('Rack::Directory')
-          Pathname.new(Rack::Directory.new('').root)
-        else
-          base_file = caller_locations.last.absolute_path
-          Pathname.new(File.dirname(base_file || '/'))
+    def apply_options(hash, options)
+      if options[:only]
+        return hash.select do |key, _value|
+          options[:only].include?(key)
         end
       end
+
+      if options[:except]
+        return hash.select do |key, _value|
+          !options[:except].include?(key)
+        end
+      end
+
+      hash
+    end
+
+    def formatted_dt
+      @formatted_dt ||= time.iso8601(DT_PRECISION)
+    end
+
+    # Attempts to encode a non UTF-8 string into UTF-8, discarding invalid characters.
+    # If it fails, a nil is returned.
+    def encode_string(string)
+      string.encode('UTF-8', {
+        :invalid => :replace,
+        :undef   => :replace,
+        :replace => '?'
+      })
+    rescue Exception
+      nil
+    end
+
+    def current_runtime_context
+      last_logger_invocation_index = caller_locations.rindex { |frame| logtail_logger_frame?(frame) }
+      return {} if last_logger_invocation_index.nil?
+
+      calling_frame_index = last_logger_invocation_index + 1
+      frame = caller_locations[calling_frame_index]
+      return {} if frame.nil?
+
+      return convert_to_runtime_context(frame)
+    end
+
+    def convert_to_runtime_context(frame)
+      {
+        file: path_relative_to_app_root(frame),
+        line: frame.lineno,
+        frame_label: frame.label.dup.force_encoding('UTF-8'),
+      }
+    end
+
+    def logtail_logger_frame?(frame)
+      !frame.path.nil? && frame.path.end_with?(LOGGER_FILE)
+    end
+
+    def path_relative_to_app_root(frame)
+      Pathname.new(frame.absolute_path).relative_path_from(root_path).to_s
+    rescue
+      frame.absolute_path || frame.path
+    end
+
+    def root_path
+      if Object.const_defined?('Rails')
+        Rails.root
+      elsif Object.const_defined?('Rack::Directory')
+        Pathname.new(Rack::Directory.new('').root)
+      else
+        base_file = caller_locations.last.absolute_path
+        Pathname.new(File.dirname(base_file || '/'))
+      end
+    end
   end
 end

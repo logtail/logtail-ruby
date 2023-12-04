@@ -135,27 +135,11 @@ module Logtail
       def build_initial_hash
         new_hash = {}
 
-        # Release context
-        release_context = Util::NonNilHashBuilder.build do |h|
-          h.add(:commit_hash, ENV['RELEASE_COMMIT'] || ENV['HEROKU_SLUG_COMMIT'])
-          h.add(:created_at, ENV['RELEASE_CREATED_AT'] || ENV['HEROKU_RELEASE_CREATED_AT'])
-          h.add(:version, ENV['RELEASE_VERSION'] || ENV['HEROKU_RELEASE_VERSION'])
-        end
-
-        if release_context != {}
-          new_hash.merge!({release: release_context})
-        end
-
         # System context
         hostname = Socket.gethostname.force_encoding('UTF-8')
         pid = Process.pid
         system_context = Contexts::System.new(hostname: hostname, pid: pid)
         new_hash.merge!(system_context.to_hash)
-
-        # Runtime context
-        thread_object_id = Thread.current.object_id
-        runtime_context = {thread_id: thread_object_id}
-        new_hash.merge!({runtime: runtime_context})
 
         new_hash
       end

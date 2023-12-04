@@ -16,6 +16,7 @@ require "logtail/logger"
 require "logtail/timer"
 require "logtail/integrator"
 require "logtail/integration"
+require "logtail/railtie"
 
 module Logtail
   # Access the main configuration object. Please see {{Logtail::Config}} for more details.

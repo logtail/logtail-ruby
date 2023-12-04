@@ -1,3 +1,5 @@
+require "rack"
+
 module Logtail
   class Config
     # Convenience module for accessing the various `Logtail::Integrations::*` classes
@@ -12,6 +14,18 @@ module Logtail
     #     config.integrations.active_record.silence = true
     module Integrations
       extend self
+
+      def http_context
+        Logtail::Integrations::Rack::HttpContext
+      end
+
+      def http_events
+        Logtail::Integrations::HttpEvents
+      end
+
+      def sbo_context
+        Logtail::Integrations::SboContext
+      end
     end
   end
 end

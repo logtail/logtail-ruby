@@ -4,7 +4,7 @@ require "logtail/util"
 module Logtail
   module Contexts
     # @private
-    class User < Context
+    class SboUser < Context
       attr_reader :id, :name, :email
 
       def initialize(attributes)
@@ -16,7 +16,7 @@ module Logtail
       # Builds a hash representation containing simple objects, suitable for serialization (JSON).
       def to_hash
         @to_hash ||= {
-          user: Util::NonNilHashBuilder.build do |h|
+          sbo_usr: Util::NonNilHashBuilder.build do |h|
             h.add(:id, id)
             h.add(:name, name)
             h.add(:email, email)

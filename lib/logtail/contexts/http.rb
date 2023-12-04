@@ -3,7 +3,7 @@ require "logtail/context"
 module Logtail
   module Contexts
     # @private
-    class HTTP < Context
+    class Http < Context
       attr_reader :host, :method, :path, :remote_addr, :request_id
 
       def initialize(attributes)

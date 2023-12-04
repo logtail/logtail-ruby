@@ -16,6 +16,33 @@ module Logtail
   # @example Logging an event
   #   logger.info "Payment rejected", payment_rejected: {customer_id: customer_id, amount: 100}
   class Logger < ::Logger
+    include ::ActiveSupport::LoggerThreadSafeLevel if defined?(::ActiveSupport::LoggerThreadSafeLevel)
+
+    if defined?(::ActiveSupport::LoggerSilence)
+      include ::ActiveSupport::LoggerSilence
+    elsif defined?(::LoggerSilence)
+      include ::LoggerSilence
+    end
+
+    class << self
+      def create_logger(*io_devices_and_loggers)
+        Logtail::Logger.new(*io_devices_and_loggers)
+      end
+
+      def create_default_logger(source_token)
+        io_device = Logtail::LogDevices::HTTP.new(source_token)
+        logger = self.create_logger(io_device)
+
+        if defined?(Sidekiq)
+          Sidekiq.configure_server do |config|
+            logger = self.create_logger(io_device, config.logger) if config.logger.class == Sidekiq::Logger
+            config.logger = logger
+          end
+        end
+
+        logger
+      end
+    end
 
     # @private
     class Formatter
