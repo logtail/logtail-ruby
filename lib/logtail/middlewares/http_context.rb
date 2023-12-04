@@ -1,19 +1,15 @@
-# frozen_string_literal: true
-
 # Extracted from Logtail Ruby Rack gem
 # https://github.com/logtail/logtail-ruby-rack
 
-require "logtail/middleware"
 require "logtail/util/request"
 require "logtail/util/encoding"
 require "logtail/current_context"
+require "logtail/middleware"
 
 module Logtail
-  module Integrations
+  module Middlewares
     class HttpContext < Middleware
       def call(env)
-        print("\n --- CALL HTTP CONTEXT\n\n")
-
         request = Util::Request.new(env)
         context = Contexts::Http.new(
           host: Util::Encoding.force_utf8_encoding(request.host),

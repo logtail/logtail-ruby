@@ -6,15 +6,15 @@
 require "set"
 
 require "logtail/config"
+require "logtail/middleware"
 require "logtail/contexts/http"
 require "logtail/current_context"
 require "logtail/formatters/http_request"
 require "logtail/formatters/http_response"
-require "logtail/middleware"
 require "logtail/util/encoding"
 
 module Logtail
-  module Integrations
+  module Middlewares
     class HttpEvents < Middleware
       class << self
         # Allows you to capture the HTTP request body, default is off (false).

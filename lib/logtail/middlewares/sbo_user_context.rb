@@ -4,11 +4,11 @@ require "logtail/config"
 require "logtail/middleware"
 
 module Logtail
-  module Integrations
+  module Middlewares
     class SboUserContext < Middleware
       class << self
         # @example Setting your own custom user context
-        #   Logtail::Integrations::SboContext.sbo_hash = lambda do |env|
+        #   Logtail::Middleware::SboUserContext.sbo_hash = lambda do |env|
         #     { request_id: env['warden'].request.request_id }
         #   end
         def sbo_hash=(proc)

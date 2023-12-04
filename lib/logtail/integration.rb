@@ -1,60 +1,57 @@
-# frozen_string_literal: true
-
-require 'logtail/rack_logger'
-require 'logtail/middleware/http_context'
-require 'logtail/middleware/http_events'
-require 'logtail/middleware/sbo_user_context'
-
 module Logtail
-  # An integration represent an integration for an entire library. For example, `Rack`.
-  # While the Logtail `Rack` integration is comprised of multiple middlewares, the
-  # `Logtail::Integrations::Rack` module is an entire integration that extends this module.
-  module Integration
-    # Easily sisable entire library integrations. This is like removing the code from
-    # Logtail. It will not touch this library and the library will function as it would
-    # without Logtail.
-    #
-    # @example
-    #   Logtail::Integrations::ActiveRecord.enabled = false
+  # Base class for `Logtail::Integrations::*`. Provides a common interface for all integrators.
+  # An integrator is a single specific integration into a part of a library. See
+  # {Integration} for higher library level integration settings.
+  class Integration
+    # Raised when an integrators requirements are not met. For example, this will be raised
+    # in the ActiveRecord integration if ActiveRecord is not available as a dependency in
+    # the current application.
+    class RequirementNotMetError < StandardError; end
 
     class << self
+      attr_writer :enabled
+
       def enabled=(value)
         @enabled = value
       end
 
-      # Accessor method for {#enabled=}
       def enabled?
         @enabled != false
       end
 
-      # Silences a library's logs. This ensures that logs are not generated at all
-      # from this library.
-      #
-      # @example
-      #   Logtail::Integrations::ActiveRecord.silence = true
       def silence=(value)
         @silence = value
       end
 
-      # Accessor method for {#silence=}
       def silence?
         @silence == true
       end
 
-      # Abstract method that each integration must implement.
-      def integrate!
-        return false unless enabled?
-
-        Integrations::RackLogger.integrate!
-      end
-
-      def middlewares
-        @middlewares ||= [
-          Integrations::HttpContext,
-          Integrations::SboUserContext,
-          Integrations::HttpEvents
+      def integrations
+        @integrations ||= [
+          Integrations::RackLogger
         ].select(&:enabled?)
       end
+
+      def integrate!(*args)
+        if !enabled?
+          Config.instance.debug_logger.debug("#{name} integration disabled, skipping") if Config.instance.debug_logger
+          return false
+        end
+
+        new(*args).integrate!
+        Config.instance.debug_logger.debug("Integrated #{name}") if Config.instance.debug_logger
+        true
+        # RequirementUnsatisfiedError is the only silent failure we support
+      rescue RequirementNotMetError => e
+        Config.instance.debug_logger.debug("Failed integrating #{name}: #{e.message}") if Config.instance.debug_logger
+        false
+      end
+    end
+
+    # Abstract method that each integration must implement.
+    def integrate!
+      raise NotImplementedError.new
     end
   end
 end

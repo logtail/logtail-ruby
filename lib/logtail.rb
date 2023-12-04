@@ -7,6 +7,8 @@ require "logtail/util"
 
 # Other (sorted alphabetically)
 require "logtail/contexts"
+require "logtail/middlewares"
+require "logtail/integrations"
 require "logtail/current_context"
 require "logtail/events"
 require "logtail/integration"
@@ -14,8 +16,6 @@ require "logtail/log_devices"
 require "logtail/log_entry"
 require "logtail/logger"
 require "logtail/timer"
-require "logtail/integrator"
-require "logtail/integration"
 require "logtail/railtie"
 
 module Logtail

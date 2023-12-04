@@ -126,11 +126,12 @@ module Logtail
       @environment ||= ENV["RACK_ENV"] || ENV["RAILS_ENV"] || "development"
     end
 
-    # Convenience method for accessing the various `Logtail::Integrations::*` class
-    # settings. These provides settings for enabling, disabled, and silencing integrations.
-    # See {Integrations} for a full list of available methods.
     def integrations
       Integrations
+    end
+
+    def middlewares
+      Middlewares
     end
 
     # This is the _main_ logger Logtail writes to. All of the Logtail integrations write to

@@ -1,30 +1,16 @@
-require "rack"
-
 module Logtail
   class Config
-    # Convenience module for accessing the various `Logtail::Integrations::*` classes
-    # through the {Logtail::Config} object. Logtail couples configuration with the class
-    # responsible for implementing it. This provides for a tighter design, but also
-    # requires the user to understand and access the various classes. This module aims
-    # to provide a simple ruby-like configuration interface for internal Logtail classes.
-    #
+    # Convenience module for accessing the various `Logtail::Integration::*` classes
+    # through the {Logtail::Config} object.
     # For example:
     #
     #     config = Logtail::Config.instance
-    #     config.integrations.active_record.silence = true
+    #     config.integrations.rack_logger.silence = true
     module Integrations
       extend self
 
-      def http_context
-        Logtail::Integrations::Rack::HttpContext
-      end
-
-      def http_events
-        Logtail::Integrations::HttpEvents
-      end
-
-      def sbo_context
-        Logtail::Integrations::SboContext
+      def rack_logger
+        Logtail::Integration::RackLogger
       end
     end
   end

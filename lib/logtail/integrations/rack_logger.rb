@@ -1,19 +1,15 @@
 # frozen_string_literal: true
 
-require 'logtail/integrator'
+require 'logtail/integration'
 
 module Logtail
   module Integrations
-    # Disables the default rail's rack logging. Note, we cannot simply uninstall this rack
-    # middleware because rails couples this with ActiveSupport instrumentation. As such,
-    # we simply disable the logger and let our Rack middleware handle the logging.
-    #
-    # See: https://github.com/rails/rails/blob/80e66cc4d90bf8c15d1a5f6e3152e90147f00772/railties/lib/rails/rack/logger.rb#L34
-    #
-    # @private
-    class RackLogger < Integrator
-
-      # @private
+    class RackLogger < Integration
+      # Disables the default rail's rack logging. Note, we cannot simply uninstall this rack
+      # middleware because rails couples this with ActiveSupport instrumentation. As such,
+      # we simply disable the logger and let our Rack middleware handle the logging.
+      #
+      # See: https://github.com/rails/rails/blob/80e66cc4d90bf8c15d1a5f6e3152e90147f00772/railties/lib/rails/rack/logger.rb#L34
       module InstanceMethods
         LOGGER = ::Logger.new(nil)
 
