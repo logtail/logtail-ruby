@@ -1,6 +1,9 @@
 require "logger"
 require "singleton"
 
+require 'logtail/config/middlewares'
+require 'logtail/config/integrations'
+
 module Logtail
   # Singleton class for reading and setting Logtail configuration.
   #
@@ -127,11 +130,11 @@ module Logtail
     end
 
     def integrations
-      Integrations
+      Config::Integrations
     end
 
     def middlewares
-      Middlewares
+      Config::Middlewares
     end
 
     # This is the _main_ logger Logtail writes to. All of the Logtail integrations write to

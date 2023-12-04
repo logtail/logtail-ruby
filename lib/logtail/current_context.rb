@@ -135,11 +135,9 @@ module Logtail
       def build_initial_hash
         new_hash = {}
 
-        # System context
-        hostname = Socket.gethostname.force_encoding('UTF-8')
-        pid = Process.pid
-        system_context = Contexts::System.new(hostname: hostname, pid: pid)
-        new_hash.merge!(system_context.to_hash)
+        # Container context
+        container_context = Contexts::Container.new
+        new_hash.merge!(container_context.to_hash)
 
         new_hash
       end
