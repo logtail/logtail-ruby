@@ -29,7 +29,8 @@ module Logtail
 
       def integrations
         @integrations ||= [
-          Integrations::RackLogger
+          Integrations::RackLogger,
+          Integrations::SidekiqLogger,
         ].select(&:enabled?)
       end
 

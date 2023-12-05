@@ -26,7 +26,17 @@ module Logtail
 
     class << self
       def create_logger(*io_devices_and_loggers)
-        Logtail::Logger.new(*io_devices_and_loggers)
+        logtail_logger = Logtail::Logger.new(*io_devices_and_loggers)
+        return logtail_logger unless tagged_logging?
+
+        ::ActiveSupport::TaggedLogging.new(logtail_logger)
+      end
+
+      def tagged_logging?
+        return true if Rails::VERSION::MAJOR >= 7
+        return true if Rails::VERSION::MAJOR == 6 && Rails::VERSION::MINOR >= 1
+
+        false
       end
 
       def create_default_logger(source_token)
