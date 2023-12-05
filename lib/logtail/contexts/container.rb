@@ -10,19 +10,39 @@ module Logtail
     class Container < Context
       attr_reader :name, :ipv4, :id
 
-      def initialize
-        @name = ENV['AWS_CONTAINER_NAME']
-        @ipv4 = ENV['AWS_CONTAINER_IPV4']
-        @id = ENV['AWS_CONTAINER_ID']
+      class << self
+        def container_name=(value)
+          @container_name = value
+        end
+
+        def container_name
+          @container_name
+        end
+
+        def container_ipv4=(value)
+          @container_ipv4 = value
+        end
+
+        def container_ipv4
+          @container_ipv4
+        end
+
+        def container_id=(value)
+          @container_id = value
+        end
+
+        def container_id
+          @container_id
+        end
       end
 
       # Builds a hash representation containing simple objects, suitable for serialization (JSON).
       def to_hash
         @to_hash ||= {
           container: Util::NonNilHashBuilder.build do |h|
-            h.add(:name, name)
-            h.add(:ipv4, ipv4)
-            h.add(:id, id)
+            h.add(:name, self.class.container_name)
+            h.add(:ipv4, self.class.container_ipv4)
+            h.add(:id, self.class.container_id)
           end
         }
       end
