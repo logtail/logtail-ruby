@@ -1,3 +1,8 @@
+## [Shippingbo](https://shippingbo.com) Fork
+ - Adds ECS container context
+ - Sidekiq clean integration (as rack logger)
+ - Remove system & runtime contexts
+ - Change user context name to pass through Shippingbo's logs cleaning rules.
 # [Better Stack](https://betterstack.com/logs) Ruby client
 
 📣 Logtail is now part of Better Stack. [Learn more ⇗](https://betterstack.com/press/introducing-better-stack/)
