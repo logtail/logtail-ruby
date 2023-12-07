@@ -3,9 +3,6 @@ require "logtail/version"
 require "logtail/config"
 require "logtail/util"
 
-# Load Overrides
-require "logtail/rails_stdout_logging"
-
 # Other (sorted alphabetically)
 require "logtail/contexts"
 require "logtail/middlewares"
