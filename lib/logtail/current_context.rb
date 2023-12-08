@@ -136,7 +136,10 @@ module Logtail
         new_hash = {}
 
         # Container context
-        container_context = Contexts::Container.new
+        container_context = Contexts::Container.new(
+          pid: Process.pid,
+          thread_id: Thread.current.object_id
+        )
         new_hash.merge!(container_context.to_hash)
 
         new_hash

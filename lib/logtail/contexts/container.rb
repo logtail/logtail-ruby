@@ -36,6 +36,13 @@ module Logtail
         end
       end
 
+      attr_reader :pid, :thread_id
+
+      def initialize(attributes)
+        @pid = attributes[:pid]
+        @thread_id = attributes[:thread_id]
+      end
+
       # Builds a hash representation containing simple objects, suitable for serialization (JSON).
       def to_hash
         @to_hash ||= {
@@ -43,6 +50,8 @@ module Logtail
             h.add(:name, self.class.container_name)
             h.add(:ipv4, self.class.container_ipv4)
             h.add(:id, self.class.container_id)
+            h.add(:pid, pid)
+            h.add(:thread_id, thread_id)
           end
         }
       end
