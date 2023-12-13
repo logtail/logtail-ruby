@@ -95,7 +95,7 @@ module Logtail
             log_http_events(env, request)
           rescue Exception => exception
             Config.instance.logger.fatal do
-              response = formatted_http_response(request, status, nil, nil)
+              response = formatted_http_response(request, 500, nil, nil)
               {
                 message: exception.message,
                 event: {
