@@ -91,63 +91,84 @@ module Logtail
             @app.call(env)
           end
         else
-          Config.instance.logger.info do
-            event_body = capture_request_body? ? request.body_content : nil
-            http_request = formatted_http_request request, event_body
-
-            {
-              message: http_request.message,
-              event: {
-                http_request_received: {
-                  body: http_request.body,
-                  content_length: http_request.content_length,
-                  headers_json: http_request.headers_json,
-                  host: http_request.host,
-                  method: http_request.method,
-                  path: http_request.path,
-                  port: http_request.port,
-                  query_string: http_request.query_string,
-                  request_id: http_request.request_id,
-                  scheme: http_request.scheme,
-                  service_name: http_request.service_name,
+          begin
+            log_http_events(env, request)
+          rescue Exception => exception
+            Config.instance.logger.fatal do
+              response = formatted_http_response(request, status, nil, nil)
+              {
+                message: exception.message,
+                event: {
+                  http_response_sent: {
+                    request_id: response.request_id,
+                    status: response.status
+                  }
                 }
               }
-            }
+            end
+
+            raise exception
           end
-
-          request_start = Time.now
-          status, headers, body = @app.call(env)
-          request_end = Time.now
-
-          Config.instance.logger.info do
-            event_body = capture_response_body? ? body : nil
-            duration_ms = (request_end - request_start) * 1000.0
-
-            http_response = formatted_http_response(
-              request,
-              status,
-              event_body,
-              duration_ms
-            )
-
-            {
-              message: http_response.message,
-              event: {
-                http_response_sent: {
-                  body: http_response.body,
-                  request_id: http_response.request_id,
-                  status: http_response.status,
-                  duration_ms: http_response.duration_ms,
-                }
-              }
-            }
-          end
-
-          [status, headers, body]
         end
       end
 
       private
+
+      def log_http_events(env, request)
+        Config.instance.logger.info do
+          event_body = capture_request_body? ? request.body_content : nil
+          http_request = formatted_http_request request, event_body
+
+          {
+            message: http_request.message,
+            event: {
+              http_request_received: {
+                body: http_request.body,
+                content_length: http_request.content_length,
+                headers_json: http_request.headers_json,
+                host: http_request.host,
+                method: http_request.method,
+                path: http_request.path,
+                port: http_request.port,
+                query_string: http_request.query_string,
+                request_id: http_request.request_id,
+                scheme: http_request.scheme,
+                service_name: http_request.service_name,
+              }
+            }
+          }
+        end
+
+        request_start = Time.now
+        status, headers, body = @app.call(env)
+        request_end = Time.now
+
+        Config.instance.logger.info do
+          event_body = capture_response_body? ? body : nil
+          duration_ms = (request_end - request_start) * 1000.0
+
+          http_response = formatted_http_response(
+            request,
+            status,
+            event_body,
+            duration_ms
+          )
+
+          {
+            message: http_response.message,
+            event: {
+              http_response_sent: {
+                body: http_response.body,
+                request_id: http_response.request_id,
+                status: http_response.status,
+                duration_ms: http_response.duration_ms,
+              }
+            }
+          }
+        end
+
+        [status, headers, body]
+      end
 
       def capture_request_body?
         self.class.capture_request_body?
