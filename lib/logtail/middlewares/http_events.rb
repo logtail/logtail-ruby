@@ -79,6 +79,10 @@ module Logtail
 
       CONTENT_LENGTH_KEY = 'Content-Length'.freeze
 
+      ERROR_STATUS_MAPPING = {
+        "ActiveRecord::RecordInvalid" => 422
+      }.freeze
+
       def call(env)
         request = Util::Request.new(env)
 
@@ -95,7 +99,9 @@ module Logtail
             log_http_events(env, request)
           rescue Exception => exception
             Config.instance.logger.fatal do
-              response = formatted_http_response(request, 500, nil, nil)
+              status = ERROR_STATUS_MAPPING[exception.class.to_s] || 500
+
+              response = formatted_http_response(request, status, nil, nil)
               {
                 message: exception.message,
                 event: {
