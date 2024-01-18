@@ -75,7 +75,7 @@ module Logtail
       hash = {
         :level => level,
         :dt => formatted_dt,
-        :message => message,
+        :message => sanitized_message,
       }
 
       if !tags.nil? && tags.length > 0
@@ -93,6 +93,21 @@ module Logtail
       hash[:context] ||= {}
 
       apply_options(hash, options)
+    end
+
+    def sanitized_message
+      return "[omitted]" if internal_web? && parameters_message?
+
+      message
+    end
+
+    def internal_web?
+      ENV['INTERNAL_WEB'].present?
+    end
+
+    def parameters_message?
+      return false if message.size < 100
+      message.starts_with? "Parameters:"
     end
 
     def apply_options(hash, options)
