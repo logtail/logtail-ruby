@@ -80,7 +80,11 @@ module Logtail
       CONTENT_LENGTH_KEY = 'Content-Length'.freeze
 
       ERROR_STATUS_MAPPING = {
-        "ActiveRecord::RecordInvalid" => 422
+        'ActiveRecord::RecordNotFound' => 404,
+        'ActiveRecord::RecordInvalid' => 422,
+        'ActionController::InvalidAuthenticityToken' => 422,
+        'ActionController::ParameterMissing' => 400,
+        'ActionDispatch::Http::Parameters::ParseError' => 400,
       }.freeze
 
       def call(env)
