@@ -82,6 +82,7 @@ module Logtail
       ERROR_STATUS_MAPPING = {
         'ActiveRecord::RecordNotFound' => 404,
         'ActiveRecord::RecordInvalid' => 422,
+        'ActionController::BadRequest' => 400,
         'ActionController::InvalidAuthenticityToken' => 422,
         'ActionController::ParameterMissing' => 400,
         'ActionDispatch::Http::Parameters::ParseError' => 400,
