@@ -35,7 +35,6 @@ module Logtail
           controller_called: Util::NonNilHashBuilder.build do |h|
             h.add(:controller, controller)
             h.add(:action, action)
-            h.add(:params_json, params_json)
           end
         }
       end
