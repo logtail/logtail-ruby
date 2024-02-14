@@ -32,6 +32,7 @@ module Logtail
           Integrations::ActiveSupportTaggedLogging,
           Integrations::RackLogger,
           Integrations::SidekiqLogger,
+          Integrations::ActionController
         ].select(&:enabled?)
       end
 
