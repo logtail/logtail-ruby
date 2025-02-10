@@ -8,7 +8,7 @@ require "logtail"
 
 # Check for program arguments
 if ARGV.length != 2
-    puts "Program needs source token and ingesting host to run. Run the program as followed\nbundle exec ruby main.rb <source-token> <ingesting-host>"
+    puts "Program needs source token and ingesting host to run. Run the program as followed\nbundle exec ruby main.rb <source_token> <ingesting_host>"
     exit
 end
 # Create logger

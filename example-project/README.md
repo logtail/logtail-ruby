@@ -16,12 +16,12 @@ Alternatively, add `gem "logtail"` to your `Gemfile` manually and then run `bund
 
  ## Run the example project
 
-_Don't forget to replace `<source-token>` and `<ingesting-host>` with your actual source token and ingesting host which you can find by going to **[Sources](https://telemetry.betterstack.com/team/0/sources) -> Configure** in Better Stack._ 
+_Don't forget to replace `<source_token>` and `<ingesting_host>` with your actual source token and ingesting host which you can find by going to **[Sources](https://telemetry.betterstack.com/team/0/sources) -> Configure** in Better Stack._ 
 
  To run the example application, run the following command adding your source token:
 
 ```bash
-bundle exec ruby main.rb <source-token> <ingesting-host>
+bundle exec ruby main.rb <source_token> <ingesting_host>
 ```
 
 This will create a total of 5 different logs, each corresponding to a different log level. You can review these logs in Logtail.
