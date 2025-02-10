@@ -7,12 +7,12 @@
 require "logtail"
 
 # Check for program arguments
-if ARGV.length != 1
-    puts "Program needs source token to run. Run the program as followed\nbundle exec ruby main.rb <source-token>"
+if ARGV.length != 2
+    puts "Program needs source token and ingesting host to run. Run the program as followed\nbundle exec ruby main.rb <source_token> <ingesting_host>"
     exit
 end
 # Create logger
-http_device = Logtail::LogDevices::HTTP.new(ARGV[0])
+http_device = Logtail::LogDevices::HTTP.new(ARGV[0], logtail_host: ARGV[1])
 logger = Logtail::Logger.new(http_device)
 
 # Filter logs that shouldn't be sent to Better Stack, see {Logtail::LogEntry} for available attributes
