@@ -17,13 +17,11 @@ module Logtail
     #
     # See {#initialize} for options and more details.
     class HTTP
-      LOGTAIL_STAGING_HOST = "in.logtail.dev".freeze
-      LOGTAIL_PRODUCTION_HOST = "in.logtail.com".freeze
-      LOGTAIL_HOST = ENV['LOGTAIL_STAGING'] ? LOGTAIL_STAGING_HOST : LOGTAIL_PRODUCTION_HOST
-      LOGTAIL_PORT = 443
-      LOGTAIL_SCHEME = "https".freeze
+      DEFAULT_INGESTING_HOST = "in.logs.betterstack.com".freeze
+      DEFAULT_INGESTING_PORT = 443
+      DEFAULT_INGESTING_SCHEME = "https".freeze
       CONTENT_TYPE = "application/msgpack".freeze
-      USER_AGENT = "Logtail Ruby/#{Logtail::VERSION} (HTTP)".freeze
+      USER_AGENT = "Better Stack Telemetry for Ruby/#{Logtail::VERSION} (HTTP)".freeze
 
       # Instantiates a new HTTP log device that can be passed to {Logtail::Logger#initialize}.
       #
@@ -36,15 +34,15 @@ module Logtail
       # you can drop the log messages instead by passing a {DroppingSizedQueue} via the
       # `:request_queue` option.
       #
-      # @param source_token [String] The API key provided to you after you add your application to
-      #   [Logtail](https://logtail.com).
+      # @param source_token [String] The API key provided to you after you add your source to
+      #   [Better Stack](https://telemetry.betterstack.com).
       # @param [Hash] options the options to create a HTTP log device with.
       # @option attributes [Symbol] :batch_size (1000) Determines the maximum of log lines in
       #   each HTTP payload. If the queue exceeds this limit an HTTP request will be issued. Bigger
       #   payloads mean higher throughput, but also use more memory. Logtail will not accept
       #   payloads larger than 1mb.
       # @option attributes [Symbol] :flush_continuously (true) This should only be disabled under
-      #   special circumstsances (like test suites). Setting this to `false` disables the
+      #   special circumstances (like test suites). Setting this to `false` disables the
       #   continuous flushing of log message. As a result, flushing must be handled externally
       #   via the #flush method.
       # @option attributes [Symbol] :flush_interval (1) How often the client should
@@ -55,25 +53,30 @@ module Logtail
       #   single persistent connection. After this number is met, the connection will be closed
       #   and a new one will be opened.
       # @option attributes [Symbol] :request_queue (FlushableDroppingSizedQueue.new(25)) The request
-      #   queue object that queues Net::HTTP requests for delivery. By deafult this is a
+      #   queue object that queues Net::HTTP requests for delivery. By default this is a
       #   `FlushableDroppingSizedQueue` of size `25`. Meaning once the queue fills up to 25
       #   requests new requests will be dropped. If you'd prefer to apply back pressure,
       #   ensuring you do not lose log data, pass a standard {SizedQueue}. See examples for
       #   an example.
-      # @option attributes [Symbol] :logtail_host The Logtail host to delivery the log lines to.
-      #   The default is set via {LOGTAIL_HOST}.
+      # @option attributes [Symbol] :ingesting_host The Better Stack Telemetry ingesting host to delivery the log lines to.
+      #   The default is set via {INGESTING_HOST}.
       #
       # @example Basic usage
-      #   Logtail::Logger.new(Logtail::LogDevices::HTTP.new("my_logtail_source_token"))
+      #   Logtail::Logger.new(Logtail::LogDevices::HTTP.new("<source_token>", ingesting_host: "<ingesting_host>"))
       #
       # @example Apply back pressure instead of dropping messages
-      #   http_log_device = Logtail::LogDevices::HTTP.new("my_logtail_source_token", request_queue: SizedQueue.new(25))
+      #   http_log_device = Logtail::LogDevices::HTTP.new("<source_token>", ingesting_host: "<ingesting_host>", request_queue: SizedQueue.new(25))
       #   Logtail::Logger.new(http_log_device)
       def initialize(source_token, options = {})
+        # Handle backward-compatibility of argument names
+        options[:ingesting_host] ||= options[:ingesting_host] if options[:ingesting_host].present?
+        options[:ingesting_port] ||= options[:logtail_port] if options[:logtail_port].present?
+        options[:ingesting_scheme] ||= options[:logtail_scheme] if options[:logtail_scheme].present?
+
         @source_token = source_token || raise(ArgumentError.new("The source_token parameter cannot be blank"))
-        @logtail_host = options[:logtail_host] || ENV['LOGTAIL_HOST'] || LOGTAIL_HOST
-        @logtail_port = options[:logtail_port] || ENV['LOGTAIL_PORT'] || LOGTAIL_PORT
-        @logtail_scheme = options[:logtail_scheme] || ENV['LOGTAIL_SCHEME'] || LOGTAIL_SCHEME
+        @ingesting_host = options[:ingesting_host] || ENV['INGESTING_HOST'] || ENV['LOGTAIL_HOST'] || DEFAULT_INGESTING_HOST
+        @ingesting_port = options[:ingesting_port] || ENV['INGESTING_PORT'] || ENV['LOGTAIL_PORT'] || DEFAULT_INGESTING_PORT
+        @ingesting_scheme = options[:ingesting_scheme] || ENV['INGESTING_SCHEME'] || ENV['LOGTAIL_SCHEME'] || DEFAULT_INGESTING_SCHEME
         @batch_size = options[:batch_size] || 1_000
         @flush_continuously = options[:flush_continuously] != false
         @flush_interval = options[:flush_interval] || 2 # 2 seconds
@@ -153,7 +156,7 @@ module Logtail
           if @last_resp.nil?
             print "."
           elsif @last_resp.code == "202"
-            puts "Log delivery successful! View your logs at https://logtail.com"
+            puts "Log delivery successful! View your logs at https://telemetry.betterstack.com"
           else
             raise <<-MESSAGE
 
@@ -282,9 +285,9 @@ MESSAGE
 
         # Builds an `Net::HTTP` object to deliver requests over.
         def build_http
-          http = Net::HTTP.new(@logtail_host, @logtail_port)
+          http = Net::HTTP.new(@ingesting_host, @ingesting_port)
           http.set_debug_output(Config.instance.debug_logger) if Config.instance.debug_logger
-          if @logtail_scheme == 'https'
+          if @ingesting_scheme == 'https'
             http.use_ssl = true
             # Verification on Windows fails despite having a valid certificate.
             http.verify_mode = OpenSSL::SSL::VERIFY_NONE
@@ -360,7 +363,7 @@ MESSAGE
 
               Logtail::Config.instance.debug do
                 if resp.code == "202"
-                  "Logs successfully sent! View your logs at https://logtail.com"
+                  "Logs successfully sent! View your logs at https://telemetry.betterstack.com"
                 else
                   "Log delivery failed! status: #{resp.code}, body: #{resp.body}"
                 end

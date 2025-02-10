@@ -16,7 +16,7 @@ module Logtail
 
     attr_reader :context_snapshot, :event, :level, :message, :progname, :tags, :time
 
-    # Creates a log entry suitable to be sent to the Logtail API.
+    # Creates a log entry suitable to be sent to the Better Stack Telemetry API.
     # @param level [Integer] the log level / severity
     # @param time [Time] the exact time the log message was written
     # @param progname [String] the progname scope for the log message
