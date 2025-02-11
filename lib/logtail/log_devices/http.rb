@@ -21,7 +21,7 @@ module Logtail
       DEFAULT_INGESTING_PORT = 443
       DEFAULT_INGESTING_SCHEME = "https".freeze
       CONTENT_TYPE = "application/msgpack".freeze
-      USER_AGENT = "Better Stack Telemetry for Ruby/#{Logtail::VERSION} (HTTP)".freeze
+      USER_AGENT = "Logtail Ruby/#{Logtail::VERSION} (HTTP)".freeze
 
       # Instantiates a new HTTP log device that can be passed to {Logtail::Logger#initialize}.
       #
