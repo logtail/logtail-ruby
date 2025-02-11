@@ -15,7 +15,7 @@ def puts_with_level(message, level = :info)
 end
 
 task :test_the_pipes, [:source_token] do |t, args|
-  support_email = "support@logtail.com"
+  support_email = "hello@betterstack.com"
   # Do not modify below this line. It's important to keep the `Logtail::Logger`
   # because it provides an API for logging structured data and capturing context.
   header = <<~HEREDOC
@@ -31,7 +31,7 @@ task :test_the_pipes, [:source_token] do |t, args|
   if response.is_a?(Exception)
     message = <<~HEREDOC
         Unable to deliver logs.
-        Here's what we received from the Logtail API:
+        Here's what we received from the Better Stack Telemetry API:
         #{response.inspect}
         If you continue to have trouble please contact support:
         #{support_email}
@@ -39,13 +39,13 @@ task :test_the_pipes, [:source_token] do |t, args|
     puts_with_level(message, :error)
   elsif response.is_a?(Net::HTTPResponse)
     if response.code.start_with? '2'
-      puts_with_level("Logs successfully sent! View them at https://logtail.com",
+      puts_with_level("Logs successfully sent! View them at https://telemetry.betterstack.com",
         :success)
     else
       message =
         <<~HEREDOC
         Unable to deliver logs.
-        We received a #{response.code} response from the Logtail API:
+        We received a #{response.code} response from the Better Stack Telemetry API:
         #{response.body.inspect}
         If you continue to have trouble please contact support:
         #{support_email}

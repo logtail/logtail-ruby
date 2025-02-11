@@ -125,7 +125,7 @@ describe Logtail::LogDevices::HTTP do
     let(:time) { Time.utc(2016, 9, 1, 12, 0, 0) }
 
     it "should deliver requests on an interval" do
-      stub = stub_request(:post, "https://in.logtail.com/").
+      stub = stub_request(:post, "https://in.logs.betterstack.com/").
         with(
           :body => start_with("\x92\x84\xA5level\xA4INFO\xA2dt\xBB2016-09-01T12:00:00.000000Z\xA7message\xB2test log message 1".force_encoding("ASCII-8BIT")),
           :headers => {
