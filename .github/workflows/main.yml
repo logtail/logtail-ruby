@@ -22,8 +22,6 @@ jobs:
           - "2.7"
           - "2.6"
           - "2.5"
-          - "2.4"
-          - "2.3"
           - "jruby-9.4.3.0"
           - "jruby-9.2.14.0"
           - "truffleruby-23.0.0"
@@ -36,7 +34,6 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby-version }}
-          rubygems: ${{ (matrix.ruby-version == '2.3' || matrix.ruby-version == '2.4') && '3.2.3' || 'default' }}
           bundler-cache: true
 
       - name: Run tests
