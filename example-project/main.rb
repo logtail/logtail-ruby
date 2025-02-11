@@ -12,7 +12,7 @@ if ARGV.length != 2
     exit
 end
 # Create logger
-http_device = Logtail::LogDevices::HTTP.new(ARGV[0], ingesting_host: ARGV[1])
+http_device = Logtail::LogDevices::HTTP.new(ARGV[0], logtail_host: ARGV[1])
 logger = Logtail::Logger.new(http_device)
 
 # Filter logs that shouldn't be sent to Better Stack, see {Logtail::LogEntry} for available attributes

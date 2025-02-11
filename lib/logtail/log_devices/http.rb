@@ -69,9 +69,9 @@ module Logtail
       #   Logtail::Logger.new(http_log_device)
       def initialize(source_token, options = {})
         # Handle backward-compatibility of argument names
-        options[:ingesting_host] ||= options[:ingesting_host] if options[:ingesting_host].present?
-        options[:ingesting_port] ||= options[:logtail_port] if options[:logtail_port].present?
-        options[:ingesting_scheme] ||= options[:logtail_scheme] if options[:logtail_scheme].present?
+        options[:ingesting_host] ||= options[:logtail_host]
+        options[:ingesting_port] ||= options[:logtail_port]
+        options[:ingesting_scheme] ||= options[:logtail_scheme]
 
         @source_token = source_token || raise(ArgumentError.new("The source_token parameter cannot be blank"))
         @ingesting_host = options[:ingesting_host] || ENV['INGESTING_HOST'] || ENV['LOGTAIL_HOST'] || DEFAULT_INGESTING_HOST
