@@ -102,7 +102,8 @@ describe Logtail::LogDevices::HTTP do
       request_queue = http.instance_variable_get(:@request_queue)
       request_attempt = request_queue.deq
       expect(request_attempt.request).to be_kind_of(Net::HTTP::Post)
-      expect(request_attempt.request.body).to start_with("\x92\x84\xA5level\xA4INFO\xA2dt\xBB2016-09-01T12:00:00.000000Z\xA7message\xB2test log message 1".force_encoding("ASCII-8BIT"))
+      decompressed_body = Zlib::Inflate.inflate(request_attempt.request.body)
+      expect(decompressed_body).to start_with("\x92\x84\xA5level\xA4INFO\xA2dt\xBB2016-09-01T12:00:00.000000Z\xA7message\xB2test log message 1".force_encoding("ASCII-8BIT"))
 
       message_queue = http.instance_variable_get(:@msg_queue)
       expect(message_queue.size).to eq(0)
@@ -126,14 +127,16 @@ describe Logtail::LogDevices::HTTP do
 
     it "should deliver requests on an interval" do
       stub = stub_request(:post, "https://in.logs.betterstack.com/").
-        with(
-          :body => start_with("\x92\x84\xA5level\xA4INFO\xA2dt\xBB2016-09-01T12:00:00.000000Z\xA7message\xB2test log message 1".force_encoding("ASCII-8BIT")),
-          :headers => {
-            'Authorization' => 'Bearer MYKEY',
-            'Content-Type' => 'application/msgpack',
-            'User-Agent' => "Logtail Ruby/#{Logtail::VERSION} (HTTP)"
-          }
-        ).
+        with do |request|
+        decompressed_body = Zlib::Inflate.inflate(request.body)
+        expect(decompressed_body).to start_with("\x92\x84\xA5level\xA4INFO\xA2dt\xBB2016-09-01T12:00:00.000000Z\xA7message\xB2test log message 1".force_encoding("ASCII-8BIT"))
+
+        expect(request.headers['Authorization']).to eq('Bearer MYKEY')
+        expect(request.headers['Content-Type']).to eq('application/msgpack')
+        expect(request.headers['User-Agent']).to eq("Logtail Ruby/#{Logtail::VERSION} (HTTP)")
+
+        true
+      end.
         to_return(:status => 200, :body => "", :headers => {})
 
       http = described_class.new("MYKEY", flush_interval: 0.1)
