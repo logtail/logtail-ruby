@@ -209,7 +209,7 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           req['Content-Encoding'] = 'gzip'
           req['User-Agent'] = USER_AGENT
           uncompressed = msgs.map { |msg| force_utf8_encoding(msg.to_hash) }.to_msgpack
-          req.body = Zlib::Deflate.deflate(uncompressed)
+          req.body = Zlib::Deflate.deflate(uncompressed, Zlib::BEST_SPEED)
           req
         end
 
