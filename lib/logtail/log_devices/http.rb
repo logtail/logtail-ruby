@@ -1,6 +1,7 @@
 require "base64"
 require "msgpack"
 require "net/https"
+require "zlib"
 
 require "logtail/config"
 require "logtail/log_devices/http/flushable_dropping_sized_queue"
@@ -168,7 +169,7 @@ Body: #{@last_resp.body}
 You can enable internal Logtail debug logging with the following:
 
 Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
-MESSAGE
+            MESSAGE
           end
         end
 
@@ -179,7 +180,7 @@ Log delivery failed! No request was made.
 You can enable internal debug logging with the following:
 
 Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
-MESSAGE
+        MESSAGE
       end
 
       private
@@ -205,8 +206,10 @@ MESSAGE
           req = Net::HTTP::Post.new(path)
           req['Authorization'] = authorization_payload
           req['Content-Type'] = CONTENT_TYPE
+          req['Content-Encoding'] = 'gzip'
           req['User-Agent'] = USER_AGENT
-          req.body = msgs.map { |msg| force_utf8_encoding(msg.to_hash) }.to_msgpack
+          uncompressed = msgs.map { |msg| force_utf8_encoding(msg.to_hash) }.to_msgpack
+          req.body = Zlib::Deflate.deflate(uncompressed, Zlib::BEST_SPEED)
           req
         end
 
