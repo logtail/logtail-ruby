@@ -206,10 +206,14 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           req = Net::HTTP::Post.new(path)
           req['Authorization'] = authorization_payload
           req['Content-Type'] = CONTENT_TYPE
-          req['Content-Encoding'] = 'deflate'
+          req['Content-Encoding'] = 'gzip'
           req['User-Agent'] = USER_AGENT
           uncompressed = msgs.map { |msg| force_utf8_encoding(msg.to_hash) }.to_msgpack
-          req.body = Zlib::Deflate.deflate(uncompressed, Zlib::BEST_SPEED)
+          string_io = StringIO.new
+          Zlib::GzipWriter.wrap(string_io) do |gz|
+            gz.write(uncompressed)
+          end
+          req.body = string_io.string
           req
         end
 
