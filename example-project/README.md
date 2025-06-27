@@ -15,13 +15,13 @@ This will install all dependencies listed in the `Gemfile.lock` file.
 Alternatively, add `gem "logtail"` to your `Gemfile` manually and then run `bundle install`.
 
  ## Run the example project
- 
- Replace `<source-token>` with your actual source token in the `main.rb` file. You can find your source token by going to _logtail.com -> sources -> edit_.
- 
+
+_Don't forget to replace `<source_token>` and `<ingesting_host>` with your actual source token and ingesting host which you can find by going to **[Sources](https://telemetry.betterstack.com/team/0/sources) -> Configure** in Better Stack._ 
+
  To run the example application, run the following command adding your source token:
 
 ```bash
-bundle exec ruby main.rb <source-token>
+bundle exec ruby main.rb <source_token> <ingesting_host>
 ```
 
 This will create a total of 5 different logs, each corresponding to a different log level. You can review these logs in Logtail.

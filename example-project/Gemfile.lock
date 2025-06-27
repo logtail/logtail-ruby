@@ -1,15 +1,15 @@
 GEM
   remote: https://rubygems.org/
   specs:
-    logtail (0.1.13)
+    logtail (0.1.17)
       msgpack (~> 1.0)
-    msgpack (1.7.2)
+    msgpack (1.8.0)
 
 PLATFORMS
   ruby
 
 DEPENDENCIES
-  logtail (~> 0.1.13)
+  logtail (~> 0.1.17)
 
 BUNDLED WITH
    2.1.4

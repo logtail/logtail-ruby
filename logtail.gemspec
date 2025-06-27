@@ -36,10 +36,4 @@ Gem::Specification.new do |spec|
   spec.add_development_dependency('rspec-its', '>= 0')
   spec.add_development_dependency('timecop', '>= 0')
   spec.add_development_dependency('webmock', '~> 2.3')
-
-  if RUBY_PLATFORM == "java"
-    spec.add_development_dependency('activerecord-jdbcsqlite3-adapter', '>= 0')
-  else
-    spec.add_development_dependency('sqlite3', '>= 0')
-  end
 end
