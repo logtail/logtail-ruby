@@ -1,4 +1,4 @@
-# This file showcases usage of logtail on Ruby projects
+# This file showcases thread safety testing of logtail on Ruby projects
 # For more information visit https://github.com/logtail/logtail-ruby
 
 # SETUP
@@ -11,38 +11,58 @@ if ARGV.length != 2
     puts "Program needs source token and ingesting host to run. Run the program as followed\nbundle exec ruby main.rb <source_token> <ingesting_host>"
     exit
 end
-# Create logger
-http_device = Logtail::LogDevices::HTTP.new(ARGV[0], ingesting_host: ARGV[1])
-logger = Logtail::Logger.new(http_device)
 
-# Filter logs that shouldn't be sent to Better Stack, see {Logtail::LogEntry} for available attributes
-Logtail.config.filter_sent_to_better_stack { |log_entry| log_entry.message.include?("DO_NOT_SEND") }
+# Configuration
+source_token = ARGV[0]
+ingesting_host = ARGV[1]
+thread_count = 100
+iterations_per_thread = 100
 
-# LOGGING
+# Thread safety test
+puts "Starting thread safety test with #{thread_count} threads..."
+puts "Initial thread count: #{Thread.list.size}"
 
-# Send debug logs messages using the debug() method
-logger.debug("Better Stack is ready!")
+threads = []
 
-# Send informative messages about interesting events using the info() method
-logger.info("I am using Better Stack!")
+thread_count.times do |thread_index|
+  threads << Thread.new(thread_index) do |index|
+    iterations_per_thread.times do |iteration|
+      begin
+        # Create a new logger instance for each iteration
+        http_device = Logtail::LogDevices::HTTP.new(source_token, ingesting_host: ingesting_host)
+        logger = Logtail::Logger.new(http_device)
+        
+        # Log messages
+        logger.info("Log message with structured logging.", {
+          thread_count:,
+          thread_index:,
+          iterations_per_thread:,
+          iteration:,
+        })
+        
+        # Close logger to ensure that all logs are sent to Better Stack
+        logger.close
+        
+        puts "Thread #{index}: Completed iteration #{iteration + 1}"
+      rescue => e
+        puts "Thread #{index}: Error in iteration #{iteration + 1}: #{e.message}"
+      end
+    end
+  end
+end
 
-# Send messages about worrying events using the warn() method
-# You can also log additional structured data
-logger.warn(
-    "log structured data",
-    item: {
-        url: "https://fictional-store.com/item-123",
-        price: 100.00
-    }
-)
+# Monitor thread count while threads are running
+monitoring_thread = Thread.new do
+  while threads.any?(&:alive?)
+    puts "Current thread count: #{Thread.list.size}"
+    sleep 0.5
+  end
+end
 
-# Some messages can be filtered, see {Logtail::Config#filter_sent_to_better_stack} call above
-logger.info("This message will not be sent to Better Stack because it contains 'DO_NOT_SEND'")
+# Wait for all threads to complete
+threads.each(&:join)
+monitoring_thread.join
 
-# Send error messages using the error() method
-logger.error("Oops! An error occurred!")
-
-# Send messages about fatal events that caused the app to crash using the fatal() method
-logger.fatal("Application crash! Needs to be fixed ASAP!")
-
+puts "\nThread safety test completed!"
+puts "Final thread count: #{Thread.list.size}"
 puts "All done! You can check your logs now."
