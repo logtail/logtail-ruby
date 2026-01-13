@@ -30,10 +30,8 @@ module Logtail
       # options control when the flush happens, `:batch_byte_size` and `:flush_interval`.
       # If either of these are surpassed, the buffer will be flushed.
       #
-      # By default, the buffer will apply back pressure when the rate of log messages exceeds
-      # the maximum delivery rate. If you don't want to sacrifice app performance in this case
-      # you can drop the log messages instead by passing a {DroppingSizedQueue} via the
-      # `:request_queue` option.
+      # By default, the buffer will drop log messages when the rate of log messages exceeds
+      # the maximum delivery rate. You can change this with the `:request_queue` option.
       #
       # @param source_token [String] The API key provided to you after you add your source to
       #   [Better Stack](https://telemetry.betterstack.com).

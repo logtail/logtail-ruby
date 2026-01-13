@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
@@ -24,10 +24,7 @@ jobs:
           - "2.7"
           - "2.6"
           - "2.5"
-          - "jruby-9.4.3.0"
-          - "jruby-9.2.14.0"
-          - "truffleruby-23.0.0"
-          - "truffleruby-22.1.0"
+          - "truffleruby"
 
     steps:
       - uses: actions/checkout@v2
