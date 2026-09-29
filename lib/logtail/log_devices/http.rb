@@ -1,4 +1,3 @@
-require "base64"
 require "msgpack"
 require "net/https"
 require "zlib"
