@@ -217,7 +217,8 @@ describe Logtail::LogDevices::HTTP do
       http_device = described_class.new("MYKEY")
       http_device.send(:ensure_flush_threads_are_started)
       outlet = http_device.instance_variable_get(:@request_outlet_thread)
-      100.times do
+      # Up to 5 seconds for the thread's first attempt, which is slow on a cold TruffleRuby.
+      500.times do
         break if connection_attempts > 0 && outlet.status == "sleep"
         sleep 0.01
       end
