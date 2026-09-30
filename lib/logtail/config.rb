@@ -32,6 +32,10 @@ module Logtail
 
     attr_writer :http_body_limit
 
+    def initialize
+      @debug_logger = nil
+    end
+
     # Whether a particular {Logtail::LogEntry} should be sent to Better Stack
     def send_to_better_stack?(log_entry)
       !@better_stack_filters&.any? { |blocker| blocker.call(log_entry) }
