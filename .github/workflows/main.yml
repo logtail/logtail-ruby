@@ -17,6 +17,7 @@ jobs:
 
       matrix:
         ruby-version:
+          - "4.0"
           - "3"
           - "3.4"
           - "3.3"
