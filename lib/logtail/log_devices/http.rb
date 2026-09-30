@@ -22,6 +22,8 @@ module Logtail
       DEFAULT_INGESTING_SCHEME = "https".freeze
       CONTENT_TYPE = "application/msgpack".freeze
       USER_AGENT = "Logtail Ruby/#{Logtail::VERSION} (HTTP)".freeze
+      INITIAL_RECONNECT_WAIT = 1 # second
+      MAX_RECONNECT_WAIT = 30 # seconds
 
       # Instantiates a new HTTP log device that can be passed to {Logtail::Logger#initialize}.
       #
@@ -83,6 +85,7 @@ module Logtail
         @request_queue = options[:request_queue] || FlushableDroppingSizedQueue.new(25)
         @successive_error_count = 0
         @requests_in_flight = 0
+        @reconnect_wait = INITIAL_RECONNECT_WAIT
       end
 
       # Write a new log line message to the buffer, and flush asynchronously if the
@@ -298,15 +301,19 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           http
         end
 
-        # Creates a loop that processes the `@request_queue` on an interval.
+        # Creates a loop that processes the `@request_queue` on an interval. After a failed
+        # connection it waits before reconnecting, twice as long after every consecutive
+        # failure up to {MAX_RECONNECT_WAIT}, so an unreachable host is not retried in a busy
+        # loop. A delivered request starts the wait over (see {#deliver_requests}).
         def request_outlet
           loop do
             http = build_http
+            connection_healthy = false
 
             begin
               Logtail::Config.instance.debug { "Starting HTTP connection" }
 
-              http.start do |conn|
+              connection_healthy = http.start do |conn|
                 deliver_requests(conn)
               end
             rescue => e
@@ -315,6 +322,12 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
               Logtail::Config.instance.debug { "Finishing HTTP connection" }
               http.finish if http.started?
             end
+
+            next if connection_healthy
+
+            Logtail::Config.instance.debug { "Reconnecting in #{@reconnect_wait} seconds" }
+            sleep(@reconnect_wait)
+            @reconnect_wait = [@reconnect_wait * 2, MAX_RECONNECT_WAIT].min
           end
         end
 
@@ -360,6 +373,7 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
               num_reqs += 1
 
               @last_resp = resp
+              @reconnect_wait = INITIAL_RECONNECT_WAIT
 
               Logtail::Config.instance.debug do
                 if resp.code == "202"

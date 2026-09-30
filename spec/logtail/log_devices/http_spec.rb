@@ -148,6 +148,87 @@ describe Logtail::LogDevices::HTTP do
 
       http.close
     end
+
+    context "when connecting or delivering fails" do
+      # Raised from the stubs below to leave the outlet's endless loop. It is not a
+      # StandardError, so the outlet's own `rescue => e` lets it through.
+      let(:stop_outlet) { Class.new(Exception) }
+      let(:http_device) { described_class.new("MYKEY", flush_continuously: false, requests_per_conn: 1) }
+      let(:request_queue) { http_device.instance_variable_get(:@request_queue) }
+      let(:waits) { [] }
+
+      before do
+        allow(http_device).to receive(:sleep) { |seconds| waits << seconds }
+      end
+
+      it "waits before reconnecting, twice as long after every refused connection, up to 30 seconds" do
+        connection_attempts = 0
+        allow_any_instance_of(Net::HTTP).to receive(:start) do
+          connection_attempts += 1
+          raise stop_outlet if connection_attempts > 7
+          raise Errno::ECONNREFUSED
+        end
+
+        expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+        expect(waits).to eq([1, 2, 4, 8, 16, 30, 30])
+      end
+
+      it "waits the same way when a request fails on an open connection, and still drops it after 3 attempts" do
+        request_queue.enq(Logtail::LogDevices::HTTP::RequestAttempt.new(Net::HTTP::Post.new("/")))
+        request_attempts = 0
+        allow_any_instance_of(Net::HTTP).to receive(:request) do
+          request_attempts += 1
+          raise Errno::ECONNRESET
+        end
+        allow(http_device).to receive(:sleep) do |seconds|
+          waits << seconds
+          raise stop_outlet if waits.size == 3
+        end
+
+        expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+        expect(waits).to eq([1, 2, 4])
+        expect(request_attempts).to eq(3)
+        expect(request_queue.size).to eq(0)
+      end
+
+      it "starts over at 1 second once a request is delivered" do
+        request_queue.enq(Logtail::LogDevices::HTTP::RequestAttempt.new(Net::HTTP::Post.new("/")))
+        connection = double("connection", request: double("response", code: "202"))
+        connections = [:refused, :refused, :delivers, :refused, :refused]
+        allow_any_instance_of(Net::HTTP).to receive(:start) do |_http, &block|
+          case connections.shift
+          when :refused then raise Errno::ECONNREFUSED
+          when :delivers then block.call(connection)
+          else raise stop_outlet
+          end
+        end
+
+        expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+        expect(waits).to eq([1, 2, 1, 2])
+      end
+    end
+
+    it "lets close stop the outlet while it waits to reconnect" do
+      connection_attempts = 0
+      allow_any_instance_of(Net::HTTP).to receive(:start) do
+        connection_attempts += 1
+        raise Errno::ECONNREFUSED
+      end
+      http_device = described_class.new("MYKEY")
+      http_device.send(:ensure_flush_threads_are_started)
+      outlet = http_device.instance_variable_get(:@request_outlet_thread)
+      # Up to 5 seconds for the thread's first attempt, which is slow on a cold TruffleRuby.
+      500.times do
+        break if connection_attempts > 0 && outlet.status == "sleep"
+        sleep 0.01
+      end
+
+      closing = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      http_device.close
+      expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - closing).to be < 0.5
+      expect(outlet).not_to be_alive
+      expect(connection_attempts).to eq(1)
+    end
   end
 
   describe "#deliver_requests" do
