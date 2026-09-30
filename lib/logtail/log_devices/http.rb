@@ -119,13 +119,13 @@ module Logtail
       # Closes the log device, cleans up, and attempts one last delivery.
       def close
         # Kill the flush thread immediately since we are about to flush again.
-        @flush_thread.kill if @flush_thread
+        @flush_thread.kill.join if @flush_thread
 
         # Flush all remaining messages
         flush
 
         # Kill the request queue thread. Flushing ensures that no requests are pending.
-        @request_outlet_thread.kill if @request_outlet_thread
+        @request_outlet_thread.kill.join if @request_outlet_thread
       end
 
       def deliver_one(msg)

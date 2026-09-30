@@ -57,10 +57,8 @@ describe Logtail::LogDevices::HTTP do
       http.send(:ensure_flush_threads_are_started)
       http.close
       thread = http.instance_variable_get(:@flush_thread)
-      sleep 0.1 # too fast!
       expect(thread).to_not be_alive
       thread = http.instance_variable_get(:@request_outlet_thread)
-      sleep 0.1 # too fast!
       expect(thread).to_not be_alive
     end
 
