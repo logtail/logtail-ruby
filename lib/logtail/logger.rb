@@ -15,6 +15,9 @@ module Logtail
   #
   # @example Logging an event
   #   logger.info "Payment rejected", payment_rejected: {customer_id: customer_id, amount: 100}
+  #
+  # @example Adding context to one log line (merged into the gem's context, whose own keys win)
+  #   logger.info "Payment rejected", context: {tenant_id: tenant_id}
   class Logger < ::Logger
 
     # @private
