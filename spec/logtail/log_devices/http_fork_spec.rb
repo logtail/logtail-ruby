@@ -35,6 +35,20 @@ describe Logtail::LogDevices::HTTP, "after a fork" do
     expect(ingest.messages).to contain_exactly("child line 0", "child line 1", "child line 2", "parent line after the fork")
   end
 
+  it "lets a child that hasn't logged exit right away, without waiting on the parent's lines" do
+    result = run_ruby(<<-RUBY)
+      require "logtail"
+      logger = Logtail::Logger.new(Logtail::LogDevices::HTTP.new("token", flush_interval: 60, #{ingest.device_options}))
+      logger.info("parent line before the fork")
+      forking = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      Process.wait(fork {})
+      puts Process.clock_gettime(Process::CLOCK_MONOTONIC) - forking
+    RUBY
+
+    expect(result.stdout.to_f).to be < 5
+    expect(ingest.messages).to eq(["parent line before the fork"])
+  end
+
   it "delivers a child's lines when it calls flush before leaving with exit!, which skips at_exit hooks" do
     result = run_ruby(<<-RUBY)
       require "logtail"
