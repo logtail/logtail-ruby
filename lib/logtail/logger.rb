@@ -192,8 +192,6 @@ module Logtail
       Logtail::Config.instance.debug { "Logtail::Logger instantiated, level: #{level}, formatter: #{formatter.class}" }
 
       @initialized = true
-
-      at_exit { self.close }
     end
 
     # Sets a new formatted on the logger.
