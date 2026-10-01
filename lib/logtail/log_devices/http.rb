@@ -24,6 +24,7 @@ module Logtail
       USER_AGENT = "Logtail Ruby/#{Logtail::VERSION} (HTTP)".freeze
       INITIAL_RECONNECT_WAIT = 1 # second
       MAX_RECONNECT_WAIT = 30 # seconds
+      SYNCHRONOUS_DELIVERY_TIMEOUT = 2 # seconds, to connect and to read the response
 
       # Instantiates a new HTTP log device that can be passed to {Logtail::Logger#initialize}.
       #
@@ -81,6 +82,9 @@ module Logtail
         @flush_continuously = options[:flush_continuously] != false
         @flush_interval = options[:flush_interval] || 2 # 2 seconds
         @requests_per_conn = options[:requests_per_conn] || 2_500
+        # The process that owns the queues and threads, see {#reset_if_forked}
+        @pid = Process.pid
+        @fork_lock = Mutex.new
         @msg_queue = FlushableDroppingSizedQueue.new(@batch_size)
         @request_queue = options[:request_queue] || FlushableDroppingSizedQueue.new(25)
         @successive_error_count = 0
@@ -94,6 +98,7 @@ module Logtail
       # of this. Hence the `@request_queue`.
       def write(msg)
         return unless Logtail.config.send_to_better_stack?(msg)
+        reset_if_forked
 
         @msg_queue.enq(msg)
 
@@ -111,11 +116,18 @@ module Logtail
       end
 
       # Flush all log messages in the buffer synchronously. This method will not return
-      # until delivery of the messages has been successful. If you want to flush
+      # until delivery of the messages has been successful, or about 5 seconds have passed.
+      # When no outlet thread runs (`flush_continuously: false`, or a forked child that hasn't
+      # logged yet), the messages are delivered in the calling thread. If you want to flush
       # asynchronously see {#flush_async}.
       def flush
+        reset_if_forked
         flush_async
-        wait_on_request_queue
+        if @request_outlet_thread && @request_outlet_thread.alive?
+          wait_on_request_queue
+        else
+          deliver_synchronously
+        end
         true
       end
 
@@ -200,6 +212,26 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           end
         end
 
+        # The queues and threads belong to the process that created them. After a fork, the
+        # parent still delivers the lines it buffered, so a child that kept them would send them
+        # again, and the parent's threads don't run in the child. The child starts over with
+        # empty queues and starts its own threads once it logs.
+        def reset_if_forked
+          return if @pid == Process.pid
+
+          @fork_lock.synchronize do
+            return if @pid == Process.pid
+
+            @msg_queue = FlushableDroppingSizedQueue.new(@batch_size)
+            # The request queue can be a SizedQueue passed as the :request_queue option
+            @request_queue.respond_to?(:flush) ? @request_queue.flush : @request_queue.clear
+            @flush_thread = @request_outlet_thread = nil
+            @requests_in_flight = 0
+            @reconnect_wait = INITIAL_RECONNECT_WAIT
+            @pid = Process.pid
+          end
+        end
+
         # Builds an HTTP request based on the current messages queued.
         def build_request(msgs)
           path = '/'
@@ -241,11 +273,43 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           end
         end
 
+        # Delivers the requests on the request queue in the calling thread, for when no outlet
+        # thread does. Returns whether all of them were delivered; errors only go to the debug log.
+        def deliver_synchronously
+          http = nil
+          while @request_queue.size > 0 && (request_attempt = @request_queue.deq)
+            http ||= start_synchronous_connection
+            @last_resp = http.request(request_attempt.request)
+          end
+          true
+        rescue => e
+          Logtail::Config.instance.debug { "Synchronous delivery failed: #{e.message}" }
+          false
+        ensure
+          http.finish if http && http.started?
+        end
+
+        # Connects with short timeouts. While Ruby shuts down it refuses new threads, and
+        # Net::HTTP (before Ruby 4.0) needs one to time out connecting, so then it connects
+        # without a timeout, but only to a host that has answered before.
+        def start_synchronous_connection
+          http = build_http
+          http.open_timeout = http.read_timeout = SYNCHRONOUS_DELIVERY_TIMEOUT
+          begin
+            http.start
+          rescue ThreadError
+            raise if @last_resp.nil?
+            http.open_timeout = nil
+            http.start
+          end
+          http
+        end
+
         # Waits on the request queue. This is used in {#flush} to ensure
         # the log data has been delivered before returning.
         def wait_on_request_queue
-          # Wait 20 seconds
-          40.times do |i|
+          # Wait 5 seconds
+          10.times do |i|
             if @request_queue.size == 0 && @requests_in_flight == 0
               Logtail::Config.instance.debug { "Request queue is empty and no requests are in flight, finish waiting" }
               return true
