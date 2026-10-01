@@ -75,6 +75,13 @@ describe Logtail::LogDevices::HTTP do
       http.close
     end
 
+    it "doesn't let a line written after it raise when delivering it fails, whatever the error" do
+      http.close
+
+      # WebMock refuses to connect with an error that isn't a StandardError
+      expect { http.write(Logtail::LogEntry.new("INFO", Time.now, nil, "test log message", nil, nil)) }.not_to raise_error
+    end
+
     it "stops waiting for the outlet thread once it has died" do
       stub_request(:post, "https://in.logs.betterstack.com/")
       http.write(Logtail::LogEntry.new("INFO", Time.now, nil, "test log message", nil, nil))
