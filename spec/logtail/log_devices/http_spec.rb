@@ -84,6 +84,35 @@ describe Logtail::LogDevices::HTTP do
       http.send(:flush)
       http.close
     end
+
+    it "delivers in the calling thread when no outlet thread runs" do
+      messages = []
+      stub = stub_request(:post, "https://in.logs.betterstack.com/").with do |request|
+        messages.concat(MessagePack.unpack(Zlib::Inflate.inflate(request.body)).map { |line| line["message"] })
+      end
+      http = described_class.new("MYKEY", flush_continuously: false)
+      http.write(Logtail::LogEntry.new("INFO", time, nil, "test log message 1", nil, nil))
+      http.write(Logtail::LogEntry.new("INFO", time, nil, "test log message 2", nil, nil))
+
+      http.flush
+
+      expect(stub).to have_been_requested.once
+      expect(messages).to eq(["test log message 1", "test log message 2"])
+      http.close
+    end
+
+    it "waits about 5 seconds at most for the outlet thread to deliver" do
+      allow_any_instance_of(Net::HTTP).to receive(:request) { sleep } # Better Stack never answers
+      http = described_class.new("MYKEY")
+      http.write(Logtail::LogEntry.new("INFO", time, nil, "test log message", nil, nil))
+
+      flushing = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      http.flush
+      expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - flushing).to be_between(4, 7)
+
+      http.instance_variable_get(:@flush_thread).kill.join
+      http.instance_variable_get(:@request_outlet_thread).kill.join
+    end
   end
 
   # Testing a private method because it helps break down our tests
