@@ -17,7 +17,7 @@ module Logtail
     end
 
     def to_json(options = {})
-      metadata.to_json(options)
+      ::JSON.generate(metadata)
     end
 
     def to_hash

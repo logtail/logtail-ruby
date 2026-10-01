@@ -25,7 +25,7 @@ module Logtail
       def add(k, v, options = {})
         if !v.nil?
           if options[:json_encode]
-            v = v.to_json
+            v = ::JSON.generate(v)
           end
 
           if options[:limit]
