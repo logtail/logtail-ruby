@@ -179,6 +179,21 @@ describe Logtail::Logger do
     end
   end
 
+  describe "#<<" do
+    it "logs the line at the info level" do
+      http_device = Logtail::LogDevices::HTTP.new("MYKEY", flush_continuously: false)
+      logger = Logtail::Logger.new(http_device)
+
+      logger << "appended line\n"
+
+      http_device.send(:flush_async)
+      request = http_device.instance_variable_get(:@request_queue).deq.request
+      entries = MessagePack.unpack(Zlib::Inflate.inflate(request.body))
+      expect(entries.size).to eq(1)
+      expect(entries[0]).to include("level" => "info", "message" => "appended line")
+    end
+  end
+
   describe "#error" do
     let(:io) { StringIO.new }
     let(:logger) { Logtail::Logger.new(io) }

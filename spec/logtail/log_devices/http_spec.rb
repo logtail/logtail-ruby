@@ -1,4 +1,7 @@
 require "spec_helper"
+require "bigdecimal"
+require "date"
+require "set"
 
 # Note: these tests access instance variables and private methods as a means of
 # not muddying the public API. This object should expose a simple buffer like
@@ -22,7 +25,7 @@ describe Logtail::LogDevices::HTTP do
 
     it "should buffer the messages" do
       http.write("test log message")
-      expect(msg_queue.flush).to eq(["test log message"])
+      expect(msg_queue.flush.map(&:message)).to eq(["test log message"])
       http.close
     end
 
@@ -105,6 +108,87 @@ describe Logtail::LogDevices::HTTP do
 
       message_queue = http.instance_variable_get(:@msg_queue)
       expect(message_queue.size).to eq(0)
+    end
+  end
+
+  # Testing a private method because it helps break down our tests
+  describe "#build_request" do
+    let(:http) { described_class.new("MYKEY", flush_continuously: false) }
+    let(:logger) { Logtail::Logger.new(http) }
+
+    # Flushes the buffer and decodes the request body, the way the API reads it.
+    def delivered_entries
+      http.send(:flush_async)
+      request = http.instance_variable_get(:@request_queue).deq.request
+      MessagePack.unpack(Zlib::Inflate.inflate(request.body))
+    end
+
+    a_proc = proc {}
+    an_object = Object.new
+    a_cyclic_hash = { name: "parent" }
+    a_cyclic_hash[:self] = a_cyclic_hash
+    a_cyclic_array = ["parent"]
+    a_cyclic_array << a_cyclic_array
+
+    {
+      "a Time" => [Time.utc(2026, 10, 1, 12, 0, 0, 123456), "2026-10-01T12:00:00.123456Z"],
+      "a Time with a UTC offset" => [Time.new(2026, 10, 1, 14, 0, 0, "+02:00"), "2026-10-01T12:00:00.000000Z"],
+      "a DateTime" => [DateTime.new(2026, 10, 1, 14, 0, 0, "+02:00"), "2026-10-01T12:00:00.000000Z"],
+      "a Date" => [Date.new(2026, 10, 1), "2026-10-01"],
+      "a BigDecimal" => [BigDecimal("19.99"), "19.99"],
+      "a Rational" => [Rational(1, 3), "1/3"],
+      "an Integer above the 64-bit range" => [2**64, "18446744073709551616"],
+      "an Integer below the 64-bit range" => [-2**63 - 1, "-9223372036854775809"],
+      "a Set" => [Set[1, 2], [1, 2]],
+      "a Struct" => [Struct.new(:id, :name).new(1, "Ann"), { "id" => 1, "name" => "Ann" }],
+      "an Exception" => [ArgumentError.new("boom"), { "class" => "ArgumentError", "message" => "boom" }],
+      "a Range" => [1..2, "1..2"],
+      "a Class" => [String, "String"],
+      "a Proc" => [a_proc, a_proc.to_s],
+      "an arbitrary object" => [an_object, an_object.to_s],
+      "a Hash that contains itself" => [a_cyclic_hash, { "name" => "parent", "self" => "[circular]" }],
+      "an Array that contains itself" => [a_cyclic_array, ["parent", "[circular]"]],
+    }.each do |description, (value, expected)|
+      it "delivers the whole batch when a log line holds #{description}" do
+        logger.info("line before")
+        logger.info("line with the value", value: value)
+        logger.info("line after")
+
+        entries = delivered_entries
+        expect(entries.map { |entry| entry["message"] }).to eq(["line before", "line with the value", "line after"])
+        expect(entries[1]["value"]).to eq(expected)
+      end
+    end
+
+    it "replaces a log line it still can't encode with one that says why, and delivers the rest" do
+      unencodable = Object.new
+      def unencodable.to_s
+        raise "to_s failed"
+      end
+
+      logger.info("line before")
+      logger.warn("line with the value", value: unencodable)
+      logger.info("line after")
+
+      entries = delivered_entries
+      expect(entries.map { |entry| entry["message"] }).to eq([
+        "line before",
+        "Logtail could not encode this log line (RuntimeError: to_s failed): line with the value",
+        "line after",
+      ])
+      expect(entries[1].keys).to contain_exactly("level", "dt", "message")
+      expect(entries[1]["level"]).to eq("warn")
+      expect(entries[1]["dt"]).to match(/\A\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z\z/)
+    end
+
+    it "delivers strings written to the device as info lines" do
+      http.write("written to the device\n")
+      ::Logger.new(http).warn("logged by a plain Ruby logger")
+
+      entries = delivered_entries
+      expect(entries.map { |entry| entry["level"] }).to eq(["info", "info"])
+      expect(entries[0]["message"]).to eq("written to the device")
+      expect(entries[1]["message"]).to end_with("WARN -- : logged by a plain Ruby logger")
     end
   end
 
