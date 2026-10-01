@@ -13,7 +13,7 @@ module Logtail
         @params = attributes[:params]
 
         if @params
-          @params_json = ::JSON.generate(@params)
+          @params_json = Util.generate_json(@params)
         end
 
         @format = attributes[:format]
