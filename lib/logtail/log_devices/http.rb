@@ -126,7 +126,7 @@ module Logtail
         if @request_outlet_thread && @request_outlet_thread.alive?
           wait_on_request_queue
         else
-          deliver_synchronously
+          deliver_synchronously(dequeue_requests)
         end
         true
       end
@@ -232,6 +232,16 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           end
         end
 
+        # Takes the queued requests off the request queue, for {#flush} when no outlet thread
+        # runs. It checks the size first because a SizedQueue (see :request_queue) blocks when empty.
+        def dequeue_requests
+          requests = []
+          while @request_queue.size > 0 && (request_attempt = @request_queue.deq)
+            requests << request_attempt.request
+          end
+          requests
+        end
+
         # Builds an HTTP request based on the current messages queued.
         def build_request(msgs)
           path = '/'
@@ -273,36 +283,30 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           end
         end
 
-        # Delivers the requests on the request queue in the calling thread, for when no outlet
-        # thread does. Returns whether all of them were delivered; errors only go to the debug log.
-        def deliver_synchronously
-          http = nil
-          while @request_queue.size > 0 && (request_attempt = @request_queue.deq)
-            http ||= start_synchronous_connection
-            @last_resp = http.request(request_attempt.request)
+        # Sends the requests in the calling thread, for when no outlet thread delivers them.
+        # Returns whether all of them were sent; errors only go to the debug log.
+        def deliver_synchronously(requests)
+          return true if requests.empty?
+
+          http = build_http
+          http.open_timeout = http.read_timeout = SYNCHRONOUS_DELIVERY_TIMEOUT
+          begin
+            http.start
+          rescue ThreadError
+            # While Ruby shuts down it refuses new threads, and Net::HTTP (before Ruby 4.0) needs
+            # one to time out connecting. Then it connects without a timeout, but only to a host
+            # that has answered before.
+            raise if @last_resp.nil?
+            http.open_timeout = nil
+            http.start
           end
+          requests.each { |request| @last_resp = http.request(request) }
           true
         rescue => e
           Logtail::Config.instance.debug { "Synchronous delivery failed: #{e.message}" }
           false
         ensure
           http.finish if http && http.started?
-        end
-
-        # Connects with short timeouts. While Ruby shuts down it refuses new threads, and
-        # Net::HTTP (before Ruby 4.0) needs one to time out connecting, so then it connects
-        # without a timeout, but only to a host that has answered before.
-        def start_synchronous_connection
-          http = build_http
-          http.open_timeout = http.read_timeout = SYNCHRONOUS_DELIVERY_TIMEOUT
-          begin
-            http.start
-          rescue ThreadError
-            raise if @last_resp.nil?
-            http.open_timeout = nil
-            http.start
-          end
-          http
         end
 
         # Waits on the request queue. This is used in {#flush} to ensure
