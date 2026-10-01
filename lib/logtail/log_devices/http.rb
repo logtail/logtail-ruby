@@ -260,7 +260,8 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
         end
 
         # Sends the requests in the calling thread, for when no outlet thread delivers them.
-        # Returns whether all of them were sent; errors only go to the debug log.
+        # Returns whether all of them were sent. Errors only go to the debug log, also those that
+        # aren't StandardErrors (WebMock refuses to connect with one); signals are raised as usual.
         def deliver_synchronously(requests)
           return true if requests.empty?
 
@@ -278,7 +279,9 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           end
           requests.each { |request| @last_resp = http.request(request) }
           true
-        rescue => e
+        rescue SignalException
+          raise
+        rescue Exception => e
           Logtail::Config.instance.debug { "Synchronous delivery failed: #{e.message}" }
           false
         ensure
