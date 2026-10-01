@@ -214,7 +214,6 @@ describe Logtail::LogDevices::HTTP do
       let(:http_device) { described_class.new("MYKEY", flush_continuously: false, requests_per_conn: 1) }
       let(:request_queue) { http_device.instance_variable_get(:@request_queue) }
       let(:waits) { [] }
-      let(:not_reported_again) { "Further rejections with this status won't be reported.\n" }
 
       before do
         allow(http_device).to receive(:sleep) { |seconds| waits << seconds }
@@ -266,10 +265,9 @@ describe Logtail::LogDevices::HTTP do
       it "drops a batch answered with 503 three times, backing off in between" do
         stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return(status: 503)
         queue_batch(1)
+        expect(http_device).not_to receive(:warn)
 
-        expect do
-          expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
-        end.not_to output.to_stderr
+        expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
         expect(stub).to have_been_requested.times(3)
         expect(waits).to eq([1, 2, 4])
       end
@@ -278,10 +276,10 @@ describe Logtail::LogDevices::HTTP do
         stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return(status: [401, "Unauthorized"])
         queue_batch(2)
         queue_batch(2)
+        expect(http_device).to receive(:warn).once.with("Logtail: Better Stack rejected 2 log lines with HTTP 401 " \
+          "Unauthorized - check your source token. Further rejections with this status won't be reported.")
 
-        expect do
-          expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
-        end.to output("Logtail: Better Stack rejected 2 log lines with HTTP 401 Unauthorized - check your source token. #{not_reported_again}").to_stderr
+        expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
         expect(stub).to have_been_requested.twice
         expect(waits).to eq([])
       end
@@ -292,7 +290,7 @@ describe Logtail::LogDevices::HTTP do
 
         expect do
           expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
-        end.to output("Logtail: Better Stack rejected 1 log line with HTTP 413 Payload Too Large. #{not_reported_again}").to_stderr
+        end.to output(/^Logtail: Better Stack rejected 1 log line with HTTP 413 Payload Too Large\. Further rejections with this status won't be reported\.$/).to_stderr
         expect(stub).to have_been_requested.once
         expect(waits).to eq([])
       end
