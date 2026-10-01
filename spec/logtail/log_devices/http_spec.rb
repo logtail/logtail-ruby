@@ -102,6 +102,15 @@ describe Logtail::LogDevices::HTTP do
       http.close
     end
 
+    it "doesn't raise when delivering in the calling thread fails, whatever the error" do
+      http = described_class.new("MYKEY", flush_continuously: false)
+      http.write(Logtail::LogEntry.new("INFO", time, nil, "test log message", nil, nil))
+
+      # WebMock refuses to connect with an error that isn't a StandardError
+      expect { http.flush }.not_to raise_error
+      http.close
+    end
+
     it "waits about 5 seconds at most for the outlet thread to deliver" do
       allow_any_instance_of(Net::HTTP).to receive(:request) { sleep } # Better Stack never answers
       http = described_class.new("MYKEY")
