@@ -57,14 +57,15 @@ describe Logtail::LogEntry do
 
       it "should not modify the user's context or the current context" do
         user_context = {runtime: {worker: "w1"}}
-        current_runtime_context = Logtail::CurrentContext.instance.snapshot[:runtime].dup
-        log_entry = Logtail::Logger::PassThroughFormatter.new.call("INFO", time, "", {message: "log message", context: user_context})
+        Logtail::CurrentContext.with(runtime: {thread_id: 456}) do
+          log_entry = Logtail::Logger::PassThroughFormatter.new.call("INFO", time, "", {message: "log message", context: user_context})
 
-        runtime_context = log_entry.to_hash[:context][:runtime]
-        expect(runtime_context[:worker]).to eq("w1")
-        expect(runtime_context[:file]).to end_with('/spec/logtail/log_entry_spec.rb')
-        expect(user_context).to eq(runtime: {worker: "w1"})
-        expect(Logtail::CurrentContext.instance.snapshot[:runtime]).to eq(current_runtime_context)
+          runtime_context = log_entry.to_hash[:context][:runtime]
+          expect(runtime_context).to include(thread_id: 456, worker: "w1")
+          expect(runtime_context[:file]).to end_with('/spec/logtail/log_entry_spec.rb')
+          expect(user_context).to eq(runtime: {worker: "w1"})
+          expect(Logtail::CurrentContext.instance.snapshot[:runtime]).to eq(thread_id: 456)
+        end
       end
 
       it "should ignore a context that isn't a Hash" do
@@ -79,16 +80,18 @@ describe Logtail::LogEntry do
       it "should deliver the context of an event" do
         http_device = Logtail::LogDevices::HTTP.new("MYKEY", flush_continuously: false)
         logger = Logtail::Logger.new(http_device)
-        logger.info("[order.placed] id=1", event_name: "order.placed", payload: {id: 1},
-                    context: {request_id: "abc-123", shop_id: 42}, tags: [], source_location: {})
+        Logtail::CurrentContext.with(system: {hostname: "computer-name.domain.com", pid: 123}) do
+          logger.info("[order.placed] id=1", event_name: "order.placed", payload: {id: 1},
+                      context: {request_id: "abc-123", shop_id: 42}, tags: [], source_location: {})
+        end
 
         http_device.send(:flush_async)
         request = http_device.instance_variable_get(:@request_queue).deq.request
         delivered = MessagePack.unpack(Zlib::Inflate.inflate(request.body)).first
         expect(delivered["event_name"]).to eq("order.placed")
         expect(delivered["context"]).to include("request_id" => "abc-123", "shop_id" => 42)
-        expect(delivered["context"]["system"]).to include("hostname" => "computer-name.domain.com")
-        expect(delivered["context"]["runtime"]).to include("thread_id", "file", "line")
+        expect(delivered["context"]["system"]).to eq("hostname" => "computer-name.domain.com", "pid" => 123)
+        expect(delivered["context"]["runtime"]).to include("file", "line")
       end
     end
   end
