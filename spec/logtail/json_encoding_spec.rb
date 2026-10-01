@@ -1,4 +1,5 @@
 require "spec_helper"
+require "open3"
 
 # With json 3, ActiveSupport 8.0 and older break `to_json` called directly: ActiveSupport's
 # encoder passes `quirks_mode:` to JSON.generate, and json 3 raises on the unknown keyword.
@@ -67,5 +68,53 @@ describe "JSON encoding when to_json raises like json 3 under ActiveSupport 8.0"
     hash = Logtail::Util::NonNilHashBuilder.build { |h| h.add(:headers_json, {"Accept" => "*/*"}, json_encode: true) }
 
     expect(hash).to eq(headers_json: "{\"Accept\":\"*/*\"}")
+  end
+end
+
+# ActiveSupport changes how the whole process encodes JSON, so these examples load it in another
+# process. It prints a log entry encoded by ActiveSupport's encoder, as LogEntry#to_json did
+# before, then by LogEntry#to_json and the JSONFormatter while that encoder raises, as it does
+# with json 3 on ActiveSupport 8.0 and older.
+describe "JSON encoding with ActiveSupport loaded" do
+  def encode_with_active_support(fields)
+    script = <<~RUBY
+      require "active_support"
+      require "active_support/core_ext/object/json"
+      require "logtail"
+
+      fields = #{fields}
+      log_entry = Logtail::LogEntry.new("INFO", Time.utc(2016, 9, 1, 12), nil, "log message", nil, fields)
+      puts ActiveSupport::JSON.encode(log_entry.to_hash)
+
+      ActiveSupport::JSON.singleton_class.prepend(Module.new do
+        def encode(*)
+          raise ArgumentError, "unknown keyword: quirks_mode"
+        end
+      end)
+      puts log_entry.to_json
+      logger = Logtail::Logger.new($stdout)
+      logger.formatter = Logtail::Logger::JSONFormatter.new
+      logger.info("log message", fields)
+    RUBY
+    lib = File.expand_path("../../lib", __dir__)
+    output, error, status = Open3.capture3(RbConfig.ruby, "-rbundler/setup", "-I", lib, "-e", script)
+    expect(status.success?).to be(true), error
+    output.lines.map { |line| JSON.parse(line) }
+  end
+
+  it "should encode times and symbols as ActiveSupport did" do
+    encoded_by_active_support, encoded, logged = encode_with_active_support("{time: Time.utc(2026, 1, 2, 3, 4, 5), status: :active}")
+
+    expect(encoded).to eq(encoded_by_active_support)
+    expect(encoded).to include("time" => "2026-01-02T03:04:05.000Z", "status" => "active")
+    expect(logged).to include("level" => "info", "time" => "2026-01-02T03:04:05.000Z", "status" => "active")
+  end
+
+  it "should encode NaN and Infinity as null, as ActiveSupport did" do
+    encoded_by_active_support, encoded, logged = encode_with_active_support("{nan: Float::NAN, infinity: Float::INFINITY}")
+
+    expect(encoded).to eq(encoded_by_active_support)
+    expect(encoded).to include("nan" => nil, "infinity" => nil)
+    expect(logged).to include("level" => "info", "nan" => nil, "infinity" => nil)
   end
 end
