@@ -68,6 +68,22 @@ describe Logtail::LogDevices::HTTP do
       expect(http).to receive(:flush).exactly(1).times
       http.close
     end
+
+    it "does nothing when called again, e.g. by the device's at_exit hook" do
+      http.close
+      expect(http).not_to receive(:flush)
+      http.close
+    end
+
+    it "stops waiting for the outlet thread once it has died" do
+      stub_request(:post, "https://in.logs.betterstack.com/")
+      http.write(Logtail::LogEntry.new("INFO", Time.now, nil, "test log message", nil, nil))
+      http.instance_variable_get(:@request_outlet_thread).kill.join
+
+      closing = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      http.close
+      expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - closing).to be < 1
+    end
   end
 
   # Testing a private method because it helps break down our tests
