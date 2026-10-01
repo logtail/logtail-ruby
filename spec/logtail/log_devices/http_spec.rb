@@ -87,8 +87,9 @@ describe Logtail::LogDevices::HTTP do
 
     it "delivers in the calling thread when no outlet thread runs" do
       messages = []
-      stub = stub_request(:post, "https://in.logs.betterstack.com/").with do |request|
+      stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return do |request|
         messages.concat(MessagePack.unpack(Zlib::Inflate.inflate(request.body)).map { |line| line["message"] })
+        { status: 202 }
       end
       http = described_class.new("MYKEY", flush_continuously: false)
       http.write(Logtail::LogEntry.new("INFO", time, nil, "test log message 1", nil, nil))
