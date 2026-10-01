@@ -78,6 +78,7 @@ end
 describe "JSON encoding with ActiveSupport loaded" do
   def encode_with_active_support(fields)
     script = <<~RUBY
+      require "logger" # ActiveSupport 6.1 needs it loaded first since concurrent-ruby 1.3.5
       require "active_support"
       require "active_support/core_ext/object/json"
       require "logtail"
