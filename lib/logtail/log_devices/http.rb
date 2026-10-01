@@ -1,5 +1,6 @@
 require "msgpack"
 require "net/https"
+require "set"
 require "zlib"
 
 require "logtail/config"
@@ -22,6 +23,7 @@ module Logtail
       DEFAULT_INGESTING_SCHEME = "https".freeze
       CONTENT_TYPE = "application/msgpack".freeze
       USER_AGENT = "Logtail Ruby/#{Logtail::VERSION} (HTTP)".freeze
+      ENCODABLE_INTEGERS = (-2**63...2**64).freeze # the integers msgpack can encode
       INITIAL_RECONNECT_WAIT = 1 # second
       MAX_RECONNECT_WAIT = 30 # seconds
 
@@ -93,6 +95,8 @@ module Logtail
       # size is constricted by the Logtail API. The actual application limit is a multiple
       # of this. Hence the `@request_queue`.
       def write(msg)
+        # Strings, e.g. from a plain ::Logger writing to this device, are sent as info lines.
+        msg = LogEntry.new(:info, Time.now, nil, msg.to_s.chomp, nil, nil) unless msg.is_a?(LogEntry)
         return unless Logtail.config.send_to_better_stack?(msg)
 
         @msg_queue.enq(msg)
@@ -208,9 +212,62 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           req['Content-Type'] = CONTENT_TYPE
           req['Content-Encoding'] = 'deflate'
           req['User-Agent'] = USER_AGENT
-          uncompressed = msgs.map { |msg| force_utf8_encoding(msg.to_hash) }.to_msgpack
+          # Entries are encoded one at a time, so one that can't be encoded doesn't lose the batch.
+          uncompressed = MessagePack::Packer.new.write_array_header(msgs.size).to_s +
+            msgs.map { |msg| encode_log_entry(msg) }.join
           req.body = Zlib::Deflate.deflate(uncompressed, Zlib::BEST_SPEED)
           req
+        end
+
+        # Encodes a single log entry with msgpack. An entry that still can't be encoded is
+        # replaced by one that says why, with the same level and time.
+        def encode_log_entry(msg)
+          force_utf8_encoding(encodable_value(msg.to_hash)).to_msgpack
+        rescue StandardError, SystemStackError => e
+          Logtail::Config.instance.debug { "Could not encode log entry: #{e.inspect}" }
+          error = force_utf8_encoding("#{e.class}: #{e.message}")
+          message = "Logtail could not encode this log line (#{error}): #{force_utf8_encoding(msg.message)}"
+          {
+            level: msg.level,
+            dt: msg.time.iso8601(LogEntry::DT_PRECISION),
+            message: message.byteslice(0, LogEntry::MESSAGE_MAX_BYTES).scrub(""),
+          }.to_msgpack
+        end
+
+        # Converts what msgpack can't encode, recursively, mostly into strings. A hash or array
+        # that contains itself is cut off with "[circular]".
+        def encodable_value(value, parents = {}.compare_by_identity)
+          case value
+          when String, Symbol, Float, true, false, nil
+            value
+          when Integer
+            ENCODABLE_INTEGERS.cover?(value) ? value : value.to_s
+          when Hash, Array, Set, Struct
+            return "[circular]" if parents.key?(value)
+
+            parents[value] = true
+            encodable =
+              if value.is_a?(Array) || value.is_a?(Set)
+                value.map { |item| encodable_value(item, parents) }
+              else
+                value.to_h.each_with_object({}) do |(key, item), hash|
+                  hash[encodable_value(key, parents)] = encodable_value(item, parents)
+                end
+              end
+            parents.delete(value)
+            encodable
+          when Time, DateTime # Rails makes ActiveSupport::TimeWithZone match Time too
+            value.to_time.getutc.iso8601(LogEntry::DT_PRECISION)
+          when Date
+            value.iso8601
+          when Exception
+            { class: value.class.name, message: value.message }
+          when Numeric
+            # BigDecimal#to_s would use an exponent, "0.1999e2"
+            defined?(::BigDecimal) && value.is_a?(::BigDecimal) ? value.to_s("F") : value.to_s
+          else
+            value.to_s
+          end
         end
 
         def force_utf8_encoding(data)
