@@ -2,14 +2,15 @@ require "spec_helper"
 
 # With json 3, ActiveSupport 8.0 and older break `to_json` called directly: ActiveSupport's
 # encoder passes `quirks_mode:` to JSON.generate, and json 3 raises on the unknown keyword.
-# Calls made by JSON.generate itself pass a JSON::State and keep working. The stub does the same.
+# Calls made by JSON.generate itself pass a JSON::State and keep working. The stub does the same
+# for the Hashes and Arrays the gem encodes (TruffleRuby can't stub it on frozen String keys).
 describe "JSON encoding when to_json raises like json 3 under ActiveSupport 8.0" do
   let(:time) { Time.utc(2016, 9, 1, 12, 0, 0) }
   let(:io) { StringIO.new }
   let(:logger) { Logtail::Logger.new(io) }
 
   before(:each) do
-    [Hash, Array, String].each do |klass|
+    [Hash, Array].each do |klass|
       allow_any_instance_of(klass).to receive(:to_json).and_wrap_original do |original, *args|
         raise ArgumentError, "unknown keyword: :quirks_mode" unless args.first.is_a?(::JSON::State)
         original.call(*args)
