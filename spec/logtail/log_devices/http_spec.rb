@@ -208,6 +208,96 @@ describe Logtail::LogDevices::HTTP do
       end
     end
 
+    context "when Better Stack answers with an error status" do
+      # Raised to leave the outlet's endless loop, see above.
+      let(:stop_outlet) { Class.new(Exception) }
+      let(:http_device) { described_class.new("MYKEY", flush_continuously: false, requests_per_conn: 1) }
+      let(:request_queue) { http_device.instance_variable_get(:@request_queue) }
+      let(:waits) { [] }
+      let(:not_reported_again) { "Further rejections with this status won't be reported.\n" }
+
+      before do
+        allow(http_device).to receive(:sleep) { |seconds| waits << seconds }
+        # Leave the loop once there is nothing left to deliver.
+        allow(request_queue).to receive(:deq).and_wrap_original { |deq| deq.call || raise(stop_outlet) }
+        # A status is reported once per process, so none has been reported yet in each example.
+        stub_const("Logtail::LogDevices::HTTP::REPORTED_REJECTIONS", [])
+      end
+
+      def queue_batch(size)
+        size.times { |i| http_device.write(Logtail::LogEntry.new("INFO", Time.now, nil, "line #{i}", nil, nil)) }
+        http_device.send(:flush_async)
+      end
+
+      it "retries a batch answered with 500 and delivers it once" do
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return({status: 500}, {status: 202})
+        queue_batch(1)
+
+        expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+        expect(stub).to have_been_requested.twice
+        expect(waits).to eq([1])
+      end
+
+      it "waits before retrying a batch answered with 429 at least as long as Retry-After says" do
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").
+          to_return({status: 429, headers: {"Retry-After" => "3"}}, {status: 202})
+        queue_batch(1)
+
+        expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+        expect(stub).to have_been_requested.twice
+        expect(waits).to eq([3])
+      end
+
+      it "reads Retry-After as a date too, and waits 60 seconds at most" do
+        Timecop.freeze(Time.utc(2026, 10, 1, 12, 0, 0)) do
+          stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return(
+            {status: 503, headers: {"Retry-After" => (Time.now + 5).httpdate}},
+            {status: 503, headers: {"Retry-After" => "3600"}},
+            {status: 202}
+          )
+          queue_batch(1)
+
+          expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+          expect(stub).to have_been_requested.times(3)
+          expect(waits).to eq([5, 60])
+        end
+      end
+
+      it "drops a batch answered with 503 three times, backing off in between" do
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return(status: 503)
+        queue_batch(1)
+
+        expect do
+          expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+        end.not_to output.to_stderr
+        expect(stub).to have_been_requested.times(3)
+        expect(waits).to eq([1, 2, 4])
+      end
+
+      it "drops batches answered with 401 and warns only once" do
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return(status: [401, "Unauthorized"])
+        queue_batch(2)
+        queue_batch(2)
+
+        expect do
+          expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+        end.to output("Logtail: Better Stack rejected 2 log lines with HTTP 401 Unauthorized - check your source token. #{not_reported_again}").to_stderr
+        expect(stub).to have_been_requested.twice
+        expect(waits).to eq([])
+      end
+
+      it "drops a batch answered with 413 and warns" do
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return(status: [413, "Payload Too Large"])
+        queue_batch(1)
+
+        expect do
+          expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+        end.to output("Logtail: Better Stack rejected 1 log line with HTTP 413 Payload Too Large. #{not_reported_again}").to_stderr
+        expect(stub).to have_been_requested.once
+        expect(waits).to eq([])
+      end
+    end
+
     it "lets close stop the outlet while it waits to reconnect" do
       connection_attempts = 0
       allow_any_instance_of(Net::HTTP).to receive(:start) do
