@@ -129,6 +129,14 @@ describe Logtail::LogDevices::HTTP do
     a_cyclic_hash[:self] = a_cyclic_hash
     a_cyclic_array = ["parent"]
     a_cyclic_array << a_cyclic_array
+    # Like a Rack::Session::SessionId, whose public id is the cookie of a server-side session
+    a_session_id = Object.new
+    def a_session_id.private_id
+      "2::hashed-session-id"
+    end
+    def a_session_id.to_s
+      "session-cookie"
+    end
 
     {
       "a Time" => [Time.utc(2026, 10, 1, 12, 0, 0, 123456), "2026-10-01T12:00:00.123456Z"],
@@ -146,6 +154,7 @@ describe Logtail::LogDevices::HTTP do
       "a Class" => [String, "String"],
       "a Proc" => [a_proc, a_proc.to_s],
       "an arbitrary object" => [an_object, an_object.to_s],
+      "an object with a private id" => [a_session_id, "2::hashed-session-id"],
       "a Hash that contains itself" => [a_cyclic_hash, { "name" => "parent", "self" => "[circular]" }],
       "an Array that contains itself" => [a_cyclic_array, ["parent", "[circular]"]],
     }.each do |description, (value, expected)|
@@ -179,6 +188,49 @@ describe Logtail::LogDevices::HTTP do
       expect(entries[1].keys).to contain_exactly("level", "dt", "message")
       expect(entries[1]["level"]).to eq("warn")
       expect(entries[1]["dt"]).to match(/\A\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z\z/)
+    end
+
+    it "sends a log line that msgpack can encode as it is, without copying it" do
+      hash = { message: "caf\u00E9", count: 1, ratio: 0.5, flag: true, none: nil, level: :info, nested: { list: [1, "two"] } }
+
+      expect(http.send(:encodable_value, hash)).to be(hash)
+    end
+
+    it "passes strings that aren't valid UTF-8 to force_utf8_encoding, also in arrays and keys" do
+      in_array = "in an array \xFF".b
+      key = "key \xFF".b
+      allow(http).to receive(:force_utf8_encoding).and_call_original
+
+      logger.info("line", items: [in_array], counts: { key => 1 })
+      delivered_entries
+
+      expect(http).to have_received(:force_utf8_encoding).with(in_array)
+      expect(http).to have_received(:force_utf8_encoding).with(key)
+    end
+
+    it "keeps the order of the keys of a hash when it converts some of them" do
+      logger.info("line", value: { "a" => 1, Time.utc(2026, 10, 1) => 2, "c" => Date.new(2026, 10, 1) })
+
+      expect(delivered_entries[0]["value"].to_a).to eq([["a", 1], ["2026-10-01T00:00:00.000000Z", 2], ["c", "2026-10-01"]])
+    end
+
+    it "leaves the logged values as they are" do
+      value = { at: Time.utc(2026, 10, 1), nested: { on: Date.new(2026, 10, 1), list: [Set[1], "\xFF".b] } }
+      original = Marshal.load(Marshal.dump(value))
+
+      logger.info("line", value: value)
+      delivered_entries
+
+      expect(value).to eq(original)
+    end
+
+    it "delivers hashes and arrays nested 110 levels deep" do
+      value = "leaf"
+      110.times { |level| value = level.even? ? { "level #{level}" => value } : [value] }
+
+      logger.info("line", value: value)
+
+      expect(delivered_entries[0]["value"]).to eq(value)
     end
 
     it "delivers strings written to the device as info lines" do
