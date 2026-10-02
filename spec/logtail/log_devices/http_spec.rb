@@ -141,6 +141,36 @@ describe Logtail::LogDevices::HTTP do
       http.instance_variable_get(:@flush_thread).kill.join
       http.instance_variable_get(:@request_outlet_thread).kill.join
     end
+
+    it "waits up to 5 seconds for a slow host when it delivers in the calling thread" do
+      # Takes 3 seconds to answer each request
+      slow_ingest = Class.new(LocalIngestServer) do
+        private
+
+        def serve(socket)
+          def socket.write(*)
+            sleep 3
+            super
+          end
+          super
+        end
+      end.new
+      result = run_ruby(<<-RUBY)
+        require "logtail"
+        # A request per line, which flush delivers as no outlet thread runs
+        http = Logtail::LogDevices::HTTP.new("token", flush_continuously: false, batch_size: 1, #{slow_ingest.device_options})
+        logger = Logtail::Logger.new(http)
+        logger.info("first line")
+        logger.info("second line")
+        logger.flush
+      RUBY
+
+      # A request that times out would drop the one after it
+      expect(result.status).to be_success, result.stderr
+      expect(slow_ingest.messages).to contain_exactly("first line", "second line")
+    ensure
+      slow_ingest.stop if slow_ingest
+    end
   end
 
   # Testing a private method because it helps break down our tests
