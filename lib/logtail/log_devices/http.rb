@@ -89,6 +89,7 @@ module Logtail
         @request_queue = options[:request_queue] || FlushableDroppingSizedQueue.new(25)
         @successive_error_count = 0
         @requests_in_flight = 0
+        @last_resp = nil
         @reconnect_wait = INITIAL_RECONNECT_WAIT
       end
 
