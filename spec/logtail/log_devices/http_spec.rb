@@ -237,6 +237,18 @@ describe Logtail::LogDevices::HTTP do
         expect(waits).to eq([1])
       end
 
+      it "retries a batch answered with 408 without a warning, and delivers it once" do
+        # Better Stack answers 408 when a new connection stays unused for more than about 10 seconds
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").
+          to_return({status: [408, "Request Time-out"], headers: {"Connection" => "close"}}, {status: 202})
+        queue_batch(1)
+        expect(http_device).not_to receive(:warn)
+
+        expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+        expect(stub).to have_been_requested.twice
+        expect(waits).to eq([1])
+      end
+
       it "waits before retrying a batch answered with 429 at least as long as Retry-After says" do
         stub = stub_request(:post, "https://in.logs.betterstack.com/").
           to_return({status: 429, headers: {"Retry-After" => "3"}}, {status: 202})
