@@ -172,6 +172,19 @@ describe Logtail::LogDevices::HTTP do
       expect(word).to start_with("caf")
       expect(word).to be_valid_encoding
     end
+
+    it "sends a string that is valid UTF-8 already as it is, without a copy" do
+      utf8 = "café"
+      ascii = "ascii".encode("US-ASCII")
+
+      expect(http.send(:force_utf8_encoding, utf8)).to be(utf8)
+      expect(http.send(:force_utf8_encoding, ascii)).to be(ascii)
+    end
+
+    it "treats a US-ASCII string with bytes above 127 as UTF-8" do
+      logger.info("us-ascii", word: "caf\xC3\xA9 \xFF".dup.force_encoding("US-ASCII"))
+      expect(delivered_entry["word"]).to eq("café �")
+    end
   end
 
   # Outlet
