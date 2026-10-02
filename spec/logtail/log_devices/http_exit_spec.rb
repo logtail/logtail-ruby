@@ -99,6 +99,19 @@ describe Logtail::LogDevices::HTTP, "when the process exits" do
     slow_ingest.stop if slow_ingest
   end
 
+  it "delivers a batch that the outlet takes off the queue while close checks whether it's done" do
+    result = run_ruby(<<-RUBY)
+      require "logtail"
+      # Widens the moment between the outlet taking a batch off the queue and counting it as in flight
+      Logtail::LogDevices::HTTP::RequestAttempt.prepend(Module.new { define_method(:attempted!) { sleep 1.5; super() } })
+      logger = Logtail::Logger.new(Logtail::LogDevices::HTTP.new("token", #{ingest.device_options}))
+      logger.info("logged right before exit")
+    RUBY
+
+    expect(result.status).to be_success, result.stderr
+    expect(ingest.messages).to eq(["logged right before exit"])
+  end
+
   it "closes a device once at exit, however many loggers write to it" do
     result = run_ruby(<<-RUBY)
       require "logtail"
