@@ -1,4 +1,21 @@
 require "spec_helper"
+require "delegate"
+
+# A local ingesting server that takes 3 seconds to answer each request
+class SlowAnsweringIngestServer < LocalIngestServer
+  class SlowSocket < SimpleDelegator
+    def write(*args)
+      sleep 3
+      super
+    end
+  end
+
+  private
+
+  def serve(socket)
+    super(SlowSocket.new(socket))
+  end
+end
 
 # What the HTTP device does while the process that logs with it exits. These run logtail in a
 # real Ruby process, and count what reaches a local ingesting server.
@@ -63,6 +80,23 @@ describe Logtail::LogDevices::HTTP, "when the process exits" do
 
     expect(result.status).to be_success, result.stderr
     expect(ingest.messages).to contain_exactly("logged before exit", "logged by an at_exit hook registered first, which runs last")
+  end
+
+  it "waits up to 5 seconds for a slow host when it delivers lines logged after closing" do
+    slow_ingest = SlowAnsweringIngestServer.new
+    result = run_ruby(<<-RUBY)
+      require "logtail"
+      logger = Logtail::Logger.new(Logtail::LogDevices::HTTP.new("token", #{slow_ingest.device_options}))
+      logger.close
+      logger.info("first line after close")
+      logger.info("second line after close")
+    RUBY
+
+    # A delivery that times out would drop the second line
+    expect(result.status).to be_success, result.stderr
+    expect(slow_ingest.messages).to contain_exactly("first line after close", "second line after close")
+  ensure
+    slow_ingest.stop if slow_ingest
   end
 
   it "closes a device once at exit, however many loggers write to it" do
