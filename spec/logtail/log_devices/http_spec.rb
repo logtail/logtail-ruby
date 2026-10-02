@@ -94,6 +94,26 @@ describe Logtail::LogDevices::HTTP do
       http.close
       expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - closing).to be < 1
     end
+
+    it "drops the lines written after it once Better Stack answered one of them with 429 or 5xx" do
+      stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return({status: 503}, {status: 202})
+      http.close
+
+      2.times { http.write(Logtail::LogEntry.new("INFO", Time.now, nil, "test log message", nil, nil)) }
+
+      expect(stub).to have_been_requested.once
+    end
+
+    it "reports a line written after it that Better Stack rejects" do
+      # A status is reported once per process, so none has been reported yet.
+      stub_const("Logtail::LogDevices::HTTP::REPORTED_REJECTIONS", [])
+      stub_request(:post, "https://in.logs.betterstack.com/").to_return(status: [403, "Forbidden"])
+      http.close
+      expect(http).to receive(:warn).once.with("Logtail: Better Stack rejected 1 log line with HTTP 403 " \
+        "Forbidden - check your source token. Further rejections with this status won't be reported.")
+
+      http.write(Logtail::LogEntry.new("INFO", Time.now, nil, "test log message", nil, nil))
+    end
   end
 
   # Testing a private method because it helps break down our tests
@@ -166,6 +186,41 @@ describe Logtail::LogDevices::HTTP do
 
       http.instance_variable_get(:@flush_thread).kill.join
       http.instance_variable_get(:@request_outlet_thread).kill.join
+    end
+
+    context "when Better Stack answers the delivery in the calling thread with an error status" do
+      let(:http) { described_class.new("MYKEY", flush_continuously: false) }
+
+      # A status is reported once per process, so none has been reported yet in each example.
+      before { stub_const("Logtail::LogDevices::HTTP::REPORTED_REJECTIONS", []) }
+
+      it "drops batches rejected with 401 and warns only once" do
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return(status: [401, "Unauthorized"])
+        expect(http).to receive(:warn).once.with("Logtail: Better Stack rejected 2 log lines with HTTP 401 " \
+          "Unauthorized - check your source token. Further rejections with this status won't be reported.")
+
+        2.times do
+          2.times { |i| http.write(Logtail::LogEntry.new("INFO", time, nil, "line #{i}", nil, nil)) }
+          http.flush
+        end
+
+        expect(stub).to have_been_requested.twice
+        http.close
+      end
+
+      it "neither retries nor reports a batch answered with 408, 429 or 5xx" do
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").
+          to_return({status: 503}, {status: 429}, {status: [408, "Request Time-out"]})
+        expect(http).not_to receive(:warn)
+
+        3.times do
+          http.write(Logtail::LogEntry.new("INFO", time, nil, "test log message", nil, nil))
+          http.flush
+        end
+
+        expect(stub).to have_been_requested.times(3)
+        http.close
+      end
     end
 
     it "waits up to 5 seconds for a slow host when it delivers in the calling thread" do
