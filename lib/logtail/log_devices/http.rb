@@ -1,5 +1,6 @@
 require "msgpack"
 require "net/https"
+require "set"
 require "time"
 require "zlib"
 
@@ -23,12 +24,15 @@ module Logtail
       DEFAULT_INGESTING_SCHEME = "https".freeze
       CONTENT_TYPE = "application/msgpack".freeze
       USER_AGENT = "Logtail Ruby/#{Logtail::VERSION} (HTTP)".freeze
+      ENCODABLE_INTEGERS = (-2**63...2**64).freeze # the integers msgpack can encode
+      MAX_UNTRACKED_DEPTH = 100 # nested hashes and arrays, see #encodable_value
       INITIAL_RECONNECT_WAIT = 1 # second
       MAX_RECONNECT_WAIT = 30 # seconds
       MAX_RETRY_AFTER = 60 # seconds
       # The HTTP statuses of rejected batches this process has warned about, see {#report_rejected_batch}.
       REPORTED_REJECTIONS = []
       REPORTED_REJECTIONS_LOCK = Mutex.new
+      SYNCHRONOUS_DELIVERY_TIMEOUT = 5 # seconds, to connect and to read the response
 
       # Instantiates a new HTTP log device that can be passed to {Logtail::Logger#initialize}.
       #
@@ -86,11 +90,21 @@ module Logtail
         @flush_continuously = options[:flush_continuously] != false
         @flush_interval = options[:flush_interval] || 2 # 2 seconds
         @requests_per_conn = options[:requests_per_conn] || 2_500
+        # The process that owns the queues and threads, see {#reset_if_forked}
+        @pid = Process.pid
+        @fork_lock = Mutex.new
         @msg_queue = FlushableDroppingSizedQueue.new(@batch_size)
         @request_queue = options[:request_queue] || FlushableDroppingSizedQueue.new(25)
         @successive_error_count = 0
         @requests_in_flight = 0
+        @last_resp = nil
         @reconnect_wait = INITIAL_RECONNECT_WAIT
+        @closed = false
+        @late_delivery_failed = false
+
+        # Delivers what is still buffered when the process exits. One hook per device, however
+        # many loggers write to it.
+        at_exit { close }
       end
 
       # Write a new log line message to the buffer, and flush asynchronously if the
@@ -98,15 +112,27 @@ module Logtail
       # size is constricted by the Logtail API. The actual application limit is a multiple
       # of this. Hence the `@request_queue`.
       def write(msg)
+        # Strings, e.g. from a plain ::Logger writing to this device, are sent as info lines.
+        msg = LogEntry.new(:info, Time.now, nil, msg.to_s.chomp, nil, nil) unless msg.is_a?(LogEntry)
         return unless Logtail.config.send_to_better_stack?(msg)
+        reset_if_forked
 
         @msg_queue.enq(msg)
+        # No thread delivers what is written after #close, e.g. by an at_exit hook that runs
+        # after the device's own.
+        return deliver_late_lines if @closed
 
         # Lazily start flush threads to ensure threads are alive after forking processes.
         # If the threads are started during instantiation they will not be copied when
         # the current process is forked. This is the case with various web servers,
         # such as phusion passenger.
-        ensure_flush_threads_are_started
+        begin
+          ensure_flush_threads_are_started
+        rescue ThreadError
+          # Ruby refuses new threads while it shuts down, e.g. to a thread that logs in an
+          # `ensure` block as it is killed at exit.
+          return deliver_late_lines
+        end
 
         if @msg_queue.full?
           Logtail::Config.instance.debug { "Flushing HTTP buffer via write" }
@@ -116,16 +142,28 @@ module Logtail
       end
 
       # Flush all log messages in the buffer synchronously. This method will not return
-      # until delivery of the messages has been successful. If you want to flush
+      # until delivery of the messages has been successful, or about 5 seconds have passed.
+      # When no outlet thread runs (`flush_continuously: false`, or a forked child that hasn't
+      # logged yet), the messages are delivered in the calling thread. If you want to flush
       # asynchronously see {#flush_async}.
       def flush
+        reset_if_forked
         flush_async
-        wait_on_request_queue
+        if @request_outlet_thread && @request_outlet_thread.alive?
+          wait_on_request_queue
+        else
+          deliver_synchronously(dequeue_requests)
+        end
         true
       end
 
-      # Closes the log device, cleans up, and attempts one last delivery.
+      # Closes the log device, cleans up, and attempts one last delivery. Closing it again does
+      # nothing; lines written after it are delivered right away (see {#write}).
       def close
+        reset_if_forked
+        return if @closed
+        @closed = true
+
         # Kill the flush thread immediately since we are about to flush again.
         @flush_thread.kill.join if @flush_thread
 
@@ -205,6 +243,38 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           end
         end
 
+        # The queues and threads belong to the process that created them. After a fork, the
+        # parent still delivers the lines it buffered, so a child that kept them would send them
+        # again, and the parent's threads don't run in the child. The child starts over with
+        # empty queues and starts its own threads once it logs, also when the parent closed the
+        # device before forking.
+        def reset_if_forked
+          return if @pid == Process.pid
+
+          @fork_lock.synchronize do
+            return if @pid == Process.pid
+
+            @msg_queue = FlushableDroppingSizedQueue.new(@batch_size)
+            # The request queue can be a SizedQueue passed as the :request_queue option
+            @request_queue.respond_to?(:flush) ? @request_queue.flush : @request_queue.clear
+            @flush_thread = @request_outlet_thread = nil
+            @requests_in_flight = 0
+            @reconnect_wait = INITIAL_RECONNECT_WAIT
+            @closed = @late_delivery_failed = false
+            @pid = Process.pid
+          end
+        end
+
+        # Takes the queued requests off the request queue, for {#flush} when no outlet thread
+        # runs. It checks the size first because a SizedQueue (see :request_queue) blocks when empty.
+        def dequeue_requests
+          requests = []
+          while @request_queue.size > 0 && (request_attempt = @request_queue.deq)
+            requests << request_attempt.request
+          end
+          requests
+        end
+
         # Builds an HTTP request based on the current messages queued.
         def build_request(msgs)
           path = '/'
@@ -213,16 +283,164 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           req['Content-Type'] = CONTENT_TYPE
           req['Content-Encoding'] = 'deflate'
           req['User-Agent'] = USER_AGENT
-          uncompressed = msgs.map { |msg| force_utf8_encoding(msg.to_hash) }.to_msgpack
+          # Entries are encoded one at a time, so one that can't be encoded doesn't lose the batch.
+          packer = MessagePack::DefaultFactory.packer
+          uncompressed = packer.write_array_header(msgs.size).to_s
+          packer.reset
+          msgs.each { |msg| uncompressed << encode_log_entry(msg, packer) }
           req.body = Zlib::Deflate.deflate(uncompressed, Zlib::BEST_SPEED)
           req
         end
 
+        # Encodes a single log entry with msgpack, with the packer if given, which it leaves empty.
+        # An entry that still can't be encoded is replaced by one that says why, with the same
+        # level and time.
+        def encode_log_entry(msg, packer = MessagePack::DefaultFactory.packer)
+          packer.write(encodable_value(msg.to_hash)).to_s
+        rescue StandardError, SystemStackError => e
+          Logtail::Config.instance.debug { "Could not encode log entry: #{e.inspect}" }
+          error = force_utf8_encoding("#{e.class}: #{e.message}")
+          message = "Logtail could not encode this log line (#{error}): #{force_utf8_encoding(msg.message)}"
+          {
+            level: msg.level,
+            dt: msg.time.iso8601(LogEntry::DT_PRECISION),
+            message: message.byteslice(0, LogEntry::MESSAGE_MAX_BYTES).scrub(""),
+          }.to_msgpack
+        ensure
+          packer.reset
+        end
+
+        # Converts what msgpack can't encode, recursively, mostly into strings, and passes strings
+        # that aren't valid UTF-8 to {#force_utf8_encoding}. Returns the value itself when nothing
+        # needs to change, as for most log lines, and otherwise copies only the hashes and arrays
+        # that change. A hash or array that contains itself is cut off with "[circular]".
+        def encodable_value(value)
+          # The first pass doesn't keep track of the hashes and arrays it is in, and gives up when
+          # they nest too deep, as in a cycle. The second pass keeps track of them to find cycles.
+          catch(:too_deep) { return replacement_for(value, nil, 0) || value }
+          replacement_for(value, {}.compare_by_identity, 0) || value
+        end
+
+        # Returns what to send instead of the value, or nil to send the value as it is.
+        def replacement_for(value, parents, depth)
+          case value
+          when Hash
+            hash_replacement(value, parents, depth)
+          when String
+            force_utf8_encoding(value) unless value.valid_encoding? && (value.encoding == Encoding::UTF_8 || value.encoding == Encoding::US_ASCII)
+          when Integer
+            value.to_s unless value.bit_length < 64 || ENCODABLE_INTEGERS.cover?(value)
+          when nil, true, false, Symbol, Float
+            nil
+          when Array, Set, Struct
+            if parents
+              return "[circular]" if parents.key?(value)
+
+              parents[value] = true
+            elsif depth == MAX_UNTRACKED_DEPTH
+              throw :too_deep
+            end
+            replacement =
+              if value.is_a?(Array)
+                array_replacement(value, parents, depth + 1)
+              elsif value.is_a?(Set)
+                array_replacement(items = value.to_a, parents, depth + 1) || items
+              else
+                hash_replacement(members = value.to_h, parents, depth + 1) || members
+              end
+            parents.delete(value) if parents
+            replacement
+          else
+            force_utf8_encoding(converted_value(value))
+          end
+        end
+
+        # Returns a copy of the hash with the replacements for its keys and values, or nil if none
+        # needs one. The most common keys and values are checked right here, which is faster.
+        def hash_replacement(hash, parents, depth)
+          if parents
+            return "[circular]" if parents.key?(hash)
+
+            parents[hash] = true
+          elsif depth == MAX_UNTRACKED_DEPTH
+            throw :too_deep
+          end
+          copy = nil
+          key_changes = false
+          hash.each_pair do |key, item|
+            new_key = replacement_for(key, parents, depth + 1) unless key.is_a?(Symbol)
+            new_item =
+              if item.is_a?(String)
+                force_utf8_encoding(item) unless item.valid_encoding? && (item.encoding == Encoding::UTF_8 || item.encoding == Encoding::US_ASCII)
+              elsif item.is_a?(Hash)
+                hash_replacement(item, parents, depth + 1)
+              elsif !(item.nil? || item.is_a?(Integer) && item.bit_length < 64 || item.is_a?(Symbol) || item.is_a?(Float))
+                replacement_for(item, parents, depth + 1)
+              end
+            if new_key
+              key_changes = true
+              break
+            elsif new_item
+              (copy ||= Hash[hash])[key] = new_item
+            end
+          end
+          # A key that changes is rare, the copy is then built from scratch to keep the order of the keys
+          if key_changes
+            copy = {}
+            hash.each_pair { |key, item| copy[replacement_for(key, parents, depth + 1) || key] = replacement_for(item, parents, depth + 1) || item }
+          end
+          parents.delete(hash) if parents
+          copy
+        end
+
+        # Returns a copy of the array with the replacements for its items, or nil if none needs one.
+        def array_replacement(array, parents, depth)
+          copy = nil
+          array.each_with_index do |item, index|
+            new_item = replacement_for(item, parents, depth)
+            (copy ||= Array.new(array))[index] = new_item if new_item
+          end
+          copy
+        end
+
+        # Converts a value msgpack can't encode that isn't a hash, array, set or struct.
+        def converted_value(value)
+          case value
+          when Time, DateTime # Rails makes ActiveSupport::TimeWithZone match Time too
+            value.to_time.getutc.iso8601(LogEntry::DT_PRECISION)
+          when Date
+            value.iso8601
+          when Exception
+            { class: value.class.name, message: value.message }
+          when Numeric
+            # BigDecimal#to_s would use an exponent, "0.1999e2"
+            defined?(::BigDecimal) && value.is_a?(::BigDecimal) ? value.to_s("F") : value.to_s
+          else
+            # The public id of a Rack::Session::SessionId is the cookie of a server-side session
+            value.respond_to?(:private_id) ? value.private_id : value.to_s
+          end
+        end
+
         def force_utf8_encoding(data)
           if data.respond_to?(:force_encoding)
-            data.dup.force_encoding('UTF-8')
-          elsif data.respond_to?(:transform_values)
-            data.transform_values { |val| force_utf8_encoding(val) }
+            # Only valid UTF-8 may leave: Better Stack stores anything else as invalid JSON. A string
+            # that is valid UTF-8 already, as nearly all are, is sent as it is.
+            return data if data.valid_encoding? && (data.encoding == Encoding::UTF_8 || data.encoding == Encoding::US_ASCII)
+
+            case data.encoding
+            when Encoding::UTF_8, Encoding::BINARY, Encoding::US_ASCII
+              data.dup.force_encoding('UTF-8').scrub
+            else
+              begin
+                data.encode('UTF-8', invalid: :replace, undef: :replace)
+              rescue Encoding::ConverterNotFoundError
+                data.dup.force_encoding('UTF-8').scrub
+              end
+            end
+          elsif data.is_a?(Hash)
+            data.each_with_object({}) { |(key, val), hash| hash[force_utf8_encoding(key)] = force_utf8_encoding(val) }
+          elsif data.is_a?(Array)
+            data.map { |val| force_utf8_encoding(val) }
           else
             data
           end
@@ -246,14 +464,47 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           end
         end
 
+        # Sends the requests in the calling thread, for when no outlet thread delivers them.
+        # Returns whether all of them were sent. Errors only go to the debug log, also those that
+        # aren't StandardErrors (WebMock refuses to connect with one); signals are raised as usual.
+        def deliver_synchronously(requests)
+          return true if requests.empty?
+
+          http = build_http
+          http.open_timeout = http.read_timeout = SYNCHRONOUS_DELIVERY_TIMEOUT
+          begin
+            http.start
+          rescue ThreadError
+            # While Ruby shuts down it refuses new threads, and Net::HTTP (before Ruby 4.0) needs
+            # one to time out connecting. Then it connects without a timeout, but only to a host
+            # that has answered before.
+            raise if @last_resp.nil?
+            http.open_timeout = nil
+            http.start
+          end
+          requests.each { |request| @last_resp = http.request(request) }
+          true
+        rescue SignalException
+          raise
+        rescue Exception => e
+          Logtail::Config.instance.debug { "Synchronous delivery failed: #{e.message}" }
+          false
+        ensure
+          http.finish if http && http.started?
+        end
+
         # Waits on the request queue. This is used in {#flush} to ensure
         # the log data has been delivered before returning.
         def wait_on_request_queue
-          # Wait 20 seconds
-          40.times do |i|
+          # Wait 5 seconds
+          10.times do |i|
             if @request_queue.size == 0 && @requests_in_flight == 0
               Logtail::Config.instance.debug { "Request queue is empty and no requests are in flight, finish waiting" }
               return true
+            end
+            if outlet_stalled?
+              Logtail::Config.instance.debug { "The HTTP outlet can't deliver the requests, finish waiting" }
+              return false
             end
             Logtail::Config.instance.debug do
               "Request size #{@request_queue.size}, reqs in-flight #{@requests_in_flight}, " \
@@ -261,6 +512,30 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
             end
             sleep 0.5
           end
+        end
+
+        # Whether the outlet thread can't deliver anything while {#close} waits for it: the thread
+        # is dead, or the host has never answered and the outlet has already waited to reconnect
+        # after a failed connection (@reconnect_wait grows after each wait until a response).
+        def outlet_stalled?
+          return true unless @request_outlet_thread && @request_outlet_thread.alive?
+
+          @last_resp.nil? && @reconnect_wait > INITIAL_RECONNECT_WAIT
+        end
+
+        # Delivers the buffered lines in the calling thread, for {#write} when no thread can. After
+        # a delivery fails, e.g. to an unreachable host, later lines are dropped so they can't
+        # hold up the exit one by one.
+        def deliver_late_lines
+          msgs = @msg_queue.flush
+          return true if msgs.empty?
+
+          if @late_delivery_failed
+            Logtail::Config.instance.debug { "Dropping #{msgs.size} log lines, an earlier synchronous delivery failed" }
+          else
+            @late_delivery_failed = !deliver_synchronously([build_request(msgs)])
+          end
+          true
         end
 
         # Flushes the message queue on an interval. You will notice that {#write} also
@@ -350,13 +625,15 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
               Logtail::Config.instance.debug { "Waiting on next request, threads waiting: #{@request_queue.size}" }
             end
 
+            # Counted as in flight before it leaves the queue, so close never sees neither
+            @requests_in_flight += 1
             request_attempt = @request_queue.deq
 
             if request_attempt.nil?
+              @requests_in_flight -= 1
               sleep(1)
             else
               request_attempt.attempted!
-              @requests_in_flight += 1
 
               begin
                 resp = conn.request(request_attempt.request)

@@ -15,25 +15,30 @@ module Logtail
   #
   # @example Logging an event
   #   logger.info "Payment rejected", payment_rejected: {customer_id: customer_id, amount: 100}
+  #
+  # @example Adding context to one log line (merged into the gem's context, whose own keys win)
+  #   logger.info "Payment rejected", context: {tenant_id: tenant_id}
   class Logger < ::Logger
 
     # @private
     class Formatter
-      # Formatters get the formatted level from the logger.
+      # Formatters get the formatted level from the logger. Ruby's Logger formats UNKNOWN, and any
+      # severity it doesn't know, as "ANY".
       SEVERITY_MAP = {
         "DEBUG" => :debug,
         "INFO" => :info,
         "WARN" => :warn,
         "ERROR" => :error,
         "FATAL" => :fatal,
-        "UNKNOWN" => :unknown
+        "UNKNOWN" => :unknown,
+        "ANY" => :unknown
       }
       EMPTY_ARRAY = []
 
       private
         def build_log_entry(severity, time, progname, logged_obj)
           context_snapshot = CurrentContext.instance.snapshot
-          level = SEVERITY_MAP.fetch(severity)
+          level = SEVERITY_MAP.fetch(severity, :unknown)
           tags = extract_active_support_tagged_logging_tags.clone
 
           if logged_obj.is_a?(Event)
@@ -41,8 +46,9 @@ module Logtail
                          tags: tags)
           elsif logged_obj.is_a?(Hash)
             # Extract the tags
-            tags.push(logged_obj[:tag]) if logged_obj.key?(:tag)
-            tags.concat(logged_obj[:tags]) if logged_obj.key?(:tags)
+            tags.concat(Array(logged_obj[:tag])) if logged_obj.key?(:tag)
+            tags.concat(Array(logged_obj[:tags])) if logged_obj.key?(:tags)
+            tags.compact!
             tags.uniq!
 
             message = logged_obj[:message]
@@ -192,8 +198,6 @@ module Logtail
       Logtail::Config.instance.debug { "Logtail::Logger instantiated, level: #{level}, formatter: #{formatter.class}" }
 
       @initialized = true
-
-      at_exit { self.close }
     end
 
     # Sets a new formatted on the logger.
@@ -216,6 +220,21 @@ module Logtail
       super
     end
 
+    # Delivers what was logged so far before it returns, waiting about 5 seconds at most with
+    # the HTTP log device. Call it before a process ends with `exit!`, which skips the at_exit
+    # hook that delivers the rest, as Resque's forked job processes do.
+    #
+    # Rails calls `flush` on Rails.logger after every request (ActiveSupport::LogSubscriber.flush_all!).
+    # Waiting there would hold up every request, so that call returns right away and the lines
+    # are delivered in the background as usual.
+    def flush
+      return true if caller_locations(1, 10).any? { |location| location.base_label == "flush_all!" }
+
+      @logdev.dev.flush if @logdev && @logdev.dev.respond_to?(:flush)
+      @extra_loggers.each { |logger| logger.flush if logger.respond_to?(:flush) }
+      true
+    end
+
     # @private
     def with_context(context, &block)
       Logtail::CurrentContext.with(context, &block)
@@ -231,6 +250,12 @@ module Logtail
       end
 
       super
+    end
+
+    # Logs the message as an info line. ::Logger#<< writes it to the log device as it is, which
+    # the HTTP device can't deliver. Rack::CommonLogger, for example, logs requests this way.
+    def <<(msg)
+      info(msg.to_s.chomp)
     end
 
     # Backwards compatibility with older ActiveSupport::Logger versions

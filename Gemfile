@@ -9,3 +9,6 @@ gem "rake", "~> 13.0"
 
 gem "rspec", "~> 3.0"
 gem "base64" if RUBY_VERSION >= "3.4.0"
+
+# spec/logtail/json_encoding_spec.rb checks the JSON with ActiveSupport loaded
+gem "activesupport"

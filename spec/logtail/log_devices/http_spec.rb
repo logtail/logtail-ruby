@@ -1,4 +1,7 @@
 require "spec_helper"
+require "bigdecimal"
+require "date"
+require "set"
 
 # Note: these tests access instance variables and private methods as a means of
 # not muddying the public API. This object should expose a simple buffer like
@@ -22,7 +25,7 @@ describe Logtail::LogDevices::HTTP do
 
     it "should buffer the messages" do
       http.write("test log message")
-      expect(msg_queue.flush).to eq(["test log message"])
+      expect(msg_queue.flush.map(&:message)).to eq(["test log message"])
       http.close
     end
 
@@ -68,6 +71,29 @@ describe Logtail::LogDevices::HTTP do
       expect(http).to receive(:flush).exactly(1).times
       http.close
     end
+
+    it "does nothing when called again, e.g. by the device's at_exit hook" do
+      http.close
+      expect(http).not_to receive(:flush)
+      http.close
+    end
+
+    it "doesn't let a line written after it raise when delivering it fails, whatever the error" do
+      http.close
+
+      # WebMock refuses to connect with an error that isn't a StandardError
+      expect { http.write(Logtail::LogEntry.new("INFO", Time.now, nil, "test log message", nil, nil)) }.not_to raise_error
+    end
+
+    it "stops waiting for the outlet thread once it has died" do
+      stub_request(:post, "https://in.logs.betterstack.com/")
+      http.write(Logtail::LogEntry.new("INFO", Time.now, nil, "test log message", nil, nil))
+      http.instance_variable_get(:@request_outlet_thread).kill.join
+
+      closing = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      http.close
+      expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - closing).to be < 1
+    end
   end
 
   # Testing a private method because it helps break down our tests
@@ -83,6 +109,93 @@ describe Logtail::LogDevices::HTTP do
       expect(http).to receive(:flush_async).exactly(2).times
       http.send(:flush)
       http.close
+    end
+
+    it "delivers in the calling thread when no outlet thread runs" do
+      messages = []
+      stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return do |request|
+        messages.concat(MessagePack.unpack(Zlib::Inflate.inflate(request.body)).map { |line| line["message"] })
+        { status: 202 }
+      end
+      http = described_class.new("MYKEY", flush_continuously: false)
+      http.write(Logtail::LogEntry.new("INFO", time, nil, "test log message 1", nil, nil))
+      http.write(Logtail::LogEntry.new("INFO", time, nil, "test log message 2", nil, nil))
+
+      http.flush
+
+      expect(stub).to have_been_requested.once
+      expect(messages).to eq(["test log message 1", "test log message 2"])
+      http.close
+    end
+
+    it "doesn't raise when delivering in the calling thread fails, whatever the error" do
+      http = described_class.new("MYKEY", flush_continuously: false)
+      http.write(Logtail::LogEntry.new("INFO", time, nil, "test log message", nil, nil))
+
+      # WebMock refuses to connect with an error that isn't a StandardError
+      expect { http.flush }.not_to raise_error
+      http.close
+    end
+
+    it "doesn't warn about @last_resp when it can't connect while Ruby shuts down, with warnings on" do
+      # Ruby 2.7 and older warn about an instance variable that is read before it's set
+      result = run_ruby(<<-RUBY)
+        $VERBOSE = true
+        require "logtail"
+        # Like Net::HTTP before Ruby 4.0 while Ruby shuts down: it can't start the thread that
+        # times out connecting
+        Net::HTTP.prepend(Module.new { def start(*); raise ThreadError, "can't alloc thread"; end })
+        http = Logtail::LogDevices::HTTP.new("token", flush_continuously: false, ingesting_host: "127.0.0.1", ingesting_port: 1, ingesting_scheme: "http")
+        logger = Logtail::Logger.new(http)
+        logger.info("line")
+        logger.flush
+      RUBY
+
+      expect(result.status).to be_success, result.stderr
+      expect(result.stderr).not_to include("@last_resp not initialized")
+    end
+
+    it "waits about 5 seconds at most for the outlet thread to deliver" do
+      allow_any_instance_of(Net::HTTP).to receive(:request) { sleep } # Better Stack never answers
+      http = described_class.new("MYKEY")
+      http.write(Logtail::LogEntry.new("INFO", time, nil, "test log message", nil, nil))
+
+      flushing = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      http.flush
+      expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - flushing).to be_between(4, 7)
+
+      http.instance_variable_get(:@flush_thread).kill.join
+      http.instance_variable_get(:@request_outlet_thread).kill.join
+    end
+
+    it "waits up to 5 seconds for a slow host when it delivers in the calling thread" do
+      # Takes 3 seconds to answer each request
+      slow_ingest = Class.new(LocalIngestServer) do
+        private
+
+        def serve(socket)
+          def socket.write(*)
+            sleep 3
+            super
+          end
+          super
+        end
+      end.new
+      result = run_ruby(<<-RUBY)
+        require "logtail"
+        # A request per line, which flush delivers as no outlet thread runs
+        http = Logtail::LogDevices::HTTP.new("token", flush_continuously: false, batch_size: 1, #{slow_ingest.device_options})
+        logger = Logtail::Logger.new(http)
+        logger.info("first line")
+        logger.info("second line")
+        logger.flush
+      RUBY
+
+      # A request that times out would drop the one after it
+      expect(result.status).to be_success, result.stderr
+      expect(slow_ingest.messages).to contain_exactly("first line", "second line")
+    ensure
+      slow_ingest.stop if slow_ingest
     end
   end
 
@@ -109,6 +222,139 @@ describe Logtail::LogDevices::HTTP do
   end
 
   # Testing a private method because it helps break down our tests
+  describe "#build_request" do
+    let(:http) { described_class.new("MYKEY", flush_continuously: false) }
+    let(:logger) { Logtail::Logger.new(http) }
+
+    # Flushes the buffer and decodes the request body, the way the API reads it.
+    def delivered_entries
+      http.send(:flush_async)
+      request = http.instance_variable_get(:@request_queue).deq.request
+      MessagePack.unpack(Zlib::Inflate.inflate(request.body))
+    end
+
+    a_proc = proc {}
+    an_object = Object.new
+    a_cyclic_hash = { name: "parent" }
+    a_cyclic_hash[:self] = a_cyclic_hash
+    a_cyclic_array = ["parent"]
+    a_cyclic_array << a_cyclic_array
+    # Like a Rack::Session::SessionId, whose public id is the cookie of a server-side session
+    a_session_id = Object.new
+    def a_session_id.private_id
+      "2::hashed-session-id"
+    end
+    def a_session_id.to_s
+      "session-cookie"
+    end
+
+    {
+      "a Time" => [Time.utc(2026, 10, 1, 12, 0, 0, 123456), "2026-10-01T12:00:00.123456Z"],
+      "a Time with a UTC offset" => [Time.new(2026, 10, 1, 14, 0, 0, "+02:00"), "2026-10-01T12:00:00.000000Z"],
+      "a DateTime" => [DateTime.new(2026, 10, 1, 14, 0, 0, "+02:00"), "2026-10-01T12:00:00.000000Z"],
+      "a Date" => [Date.new(2026, 10, 1), "2026-10-01"],
+      "a BigDecimal" => [BigDecimal("19.99"), "19.99"],
+      "a Rational" => [Rational(1, 3), "1/3"],
+      "an Integer above the 64-bit range" => [2**64, "18446744073709551616"],
+      "an Integer below the 64-bit range" => [-2**63 - 1, "-9223372036854775809"],
+      "a Set" => [Set[1, 2], [1, 2]],
+      "a Struct" => [Struct.new(:id, :name).new(1, "Ann"), { "id" => 1, "name" => "Ann" }],
+      "an Exception" => [ArgumentError.new("boom"), { "class" => "ArgumentError", "message" => "boom" }],
+      "a Range" => [1..2, "1..2"],
+      "a Class" => [String, "String"],
+      "a Proc" => [a_proc, a_proc.to_s],
+      "an arbitrary object" => [an_object, an_object.to_s],
+      "an object with a private id" => [a_session_id, "2::hashed-session-id"],
+      "a Hash that contains itself" => [a_cyclic_hash, { "name" => "parent", "self" => "[circular]" }],
+      "an Array that contains itself" => [a_cyclic_array, ["parent", "[circular]"]],
+    }.each do |description, (value, expected)|
+      it "delivers the whole batch when a log line holds #{description}" do
+        logger.info("line before")
+        logger.info("line with the value", value: value)
+        logger.info("line after")
+
+        entries = delivered_entries
+        expect(entries.map { |entry| entry["message"] }).to eq(["line before", "line with the value", "line after"])
+        expect(entries[1]["value"]).to eq(expected)
+      end
+    end
+
+    it "replaces a log line it still can't encode with one that says why, and delivers the rest" do
+      unencodable = Object.new
+      def unencodable.to_s
+        raise "to_s failed"
+      end
+
+      logger.info("line before")
+      logger.warn("line with the value", value: unencodable)
+      logger.info("line after")
+
+      entries = delivered_entries
+      expect(entries.map { |entry| entry["message"] }).to eq([
+        "line before",
+        "Logtail could not encode this log line (RuntimeError: to_s failed): line with the value",
+        "line after",
+      ])
+      expect(entries[1].keys).to contain_exactly("level", "dt", "message")
+      expect(entries[1]["level"]).to eq("warn")
+      expect(entries[1]["dt"]).to match(/\A\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z\z/)
+    end
+
+    it "sends a log line that msgpack can encode as it is, without copying it" do
+      hash = { message: "caf\u00E9", count: 1, ratio: 0.5, flag: true, none: nil, level: :info, nested: { list: [1, "two"] } }
+
+      expect(http.send(:encodable_value, hash)).to be(hash)
+    end
+
+    it "passes strings that aren't valid UTF-8 to force_utf8_encoding, also in arrays and keys" do
+      in_array = "in an array \xFF".b
+      key = "key \xFF".b
+      allow(http).to receive(:force_utf8_encoding).and_call_original
+
+      logger.info("line", items: [in_array], counts: { key => 1 })
+      delivered_entries
+
+      expect(http).to have_received(:force_utf8_encoding).with(in_array).at_least(:once)
+      expect(http).to have_received(:force_utf8_encoding).with(key).at_least(:once)
+    end
+
+    it "keeps the order of the keys of a hash when it converts some of them" do
+      logger.info("line", value: { "a" => 1, Time.utc(2026, 10, 1) => 2, "c" => Date.new(2026, 10, 1) })
+
+      expect(delivered_entries[0]["value"].to_a).to eq([["a", 1], ["2026-10-01T00:00:00.000000Z", 2], ["c", "2026-10-01"]])
+    end
+
+    it "leaves the logged values as they are" do
+      value = { at: Time.utc(2026, 10, 1), nested: { on: Date.new(2026, 10, 1), list: [Set[1], "\xFF".b] } }
+      original = Marshal.load(Marshal.dump(value))
+
+      logger.info("line", value: value)
+      delivered_entries
+
+      expect(value).to eq(original)
+    end
+
+    it "delivers hashes and arrays nested 110 levels deep" do
+      value = "leaf"
+      110.times { |level| value = level.even? ? { "level #{level}" => value } : [value] }
+
+      logger.info("line", value: value)
+
+      expect(delivered_entries[0]["value"]).to eq(value)
+    end
+
+    it "delivers strings written to the device as info lines" do
+      http.write("written to the device\n")
+      ::Logger.new(http).warn("logged by a plain Ruby logger")
+
+      entries = delivered_entries
+      expect(entries.map { |entry| entry["level"] }).to eq(["info", "info"])
+      expect(entries[0]["message"]).to eq("written to the device")
+      expect(entries[1]["message"]).to end_with("WARN -- : logged by a plain Ruby logger")
+    end
+  end
+
+  # Testing a private method because it helps break down our tests
   describe "#intervaled_flush" do
     it "should start a intervaled flush thread and flush on an interval" do
       http = described_class.new("MYKEY", flush_interval: 0.1)
@@ -116,6 +362,74 @@ describe Logtail::LogDevices::HTTP do
       expect(http).to receive(:flush_async).at_least(3).times
       sleep 1.1 # iterations check every 0.5 seconds
       http.close
+    end
+  end
+
+  # Testing a private method because it helps break down our tests
+  describe "#force_utf8_encoding" do
+    let(:http) { described_class.new("MYKEY", flush_continuously: false) }
+    let(:logger) { Logtail::Logger.new(http) }
+
+    # Flushes the buffer and decodes the single entry in the request, the way the API reads it.
+    def delivered_entry
+      http.send(:flush_async)
+      request = http.instance_variable_get(:@request_queue).deq.request
+      MessagePack.unpack(Zlib::Inflate.inflate(request.body)).first
+    end
+
+    it "replaces invalid bytes in the message with U+FFFD" do
+      logger.info("invalid \xFF\xFE bytes")
+      expect(delivered_entry["message"]).to eq("invalid �� bytes")
+    end
+
+    it "treats a binary message as UTF-8" do
+      logger.info("caf\xC3\xA9 \xFF".b)
+      expect(delivered_entry["message"]).to eq("café �")
+    end
+
+    it "replaces invalid bytes in a nested field" do
+      logger.info("nested", user: { name: "An\xFFn" })
+      expect(delivered_entry["user"]).to eq("name" => "An�n")
+    end
+
+    it "replaces invalid bytes in array elements" do
+      logger.info("array", items: ["valid", "\xFF\xFE".b, ["in\xFFner"]])
+      expect(delivered_entry["items"]).to eq(["valid", "��", ["in�ner"]])
+    end
+
+    it "replaces invalid bytes in hash keys" do
+      logger.info("keys", counts: { "k\xFFy".b => 1 })
+      expect(delivered_entry["counts"]).to eq("k�y" => 1)
+    end
+
+    it "replaces invalid bytes in the context" do
+      Logtail.with_context(request: { path: "/caf\xE9".b }) { logger.info("context") }
+      expect(delivered_entry["context"]["request"]).to eq("path" => "/caf�")
+    end
+
+    it "converts strings in other encodings to UTF-8" do
+      logger.info("latin-1", city: "Montr\xE9al".dup.force_encoding("ISO-8859-1"))
+      expect(delivered_entry["city"]).to eq("Montréal")
+    end
+
+    it "sends valid UTF-8 for a string in an encoding Ruby can't convert" do
+      logger.info("windows-1258", word: "caf\xE9".dup.force_encoding("Windows-1258"))
+      word = delivered_entry["word"]
+      expect(word).to start_with("caf")
+      expect(word).to be_valid_encoding
+    end
+
+    it "sends a string that is valid UTF-8 already as it is, without a copy" do
+      utf8 = "café"
+      ascii = "ascii".encode("US-ASCII")
+
+      expect(http.send(:force_utf8_encoding, utf8)).to be(utf8)
+      expect(http.send(:force_utf8_encoding, ascii)).to be(ascii)
+    end
+
+    it "treats a US-ASCII string with bytes above 127 as UTF-8" do
+      logger.info("us-ascii", word: "caf\xC3\xA9 \xFF".dup.force_encoding("US-ASCII"))
+      expect(delivered_entry["word"]).to eq("café �")
     end
   end
 
