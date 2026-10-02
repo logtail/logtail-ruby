@@ -239,6 +239,12 @@ module Logtail
       super
     end
 
+    # Logs the message as an info line. ::Logger#<< writes it to the log device as it is, which
+    # the HTTP device can't deliver. Rack::CommonLogger, for example, logs requests this way.
+    def <<(msg)
+      info(msg.to_s.chomp)
+    end
+
     # Backwards compatibility with older ActiveSupport::Logger versions
     Logger::Severity.constants.each do |severity|
       class_eval(<<-EOT, __FILE__, __LINE__ + 1)
