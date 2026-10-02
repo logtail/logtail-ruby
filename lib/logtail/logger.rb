@@ -19,21 +19,23 @@ module Logtail
 
     # @private
     class Formatter
-      # Formatters get the formatted level from the logger.
+      # Formatters get the formatted level from the logger. Ruby's Logger formats UNKNOWN, and any
+      # severity it doesn't know, as "ANY".
       SEVERITY_MAP = {
         "DEBUG" => :debug,
         "INFO" => :info,
         "WARN" => :warn,
         "ERROR" => :error,
         "FATAL" => :fatal,
-        "UNKNOWN" => :unknown
+        "UNKNOWN" => :unknown,
+        "ANY" => :unknown
       }
       EMPTY_ARRAY = []
 
       private
         def build_log_entry(severity, time, progname, logged_obj)
           context_snapshot = CurrentContext.instance.snapshot
-          level = SEVERITY_MAP.fetch(severity)
+          level = SEVERITY_MAP.fetch(severity, :unknown)
           tags = extract_active_support_tagged_logging_tags.clone
 
           if logged_obj.is_a?(Event)
@@ -41,8 +43,9 @@ module Logtail
                          tags: tags)
           elsif logged_obj.is_a?(Hash)
             # Extract the tags
-            tags.push(logged_obj[:tag]) if logged_obj.key?(:tag)
-            tags.concat(logged_obj[:tags]) if logged_obj.key?(:tags)
+            tags.concat(Array(logged_obj[:tag])) if logged_obj.key?(:tag)
+            tags.concat(Array(logged_obj[:tags])) if logged_obj.key?(:tags)
+            tags.compact!
             tags.uniq!
 
             message = logged_obj[:message]
