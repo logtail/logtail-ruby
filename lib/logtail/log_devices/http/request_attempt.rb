@@ -4,11 +4,12 @@ module Logtail
       # Represents an attempt to deliver a request. Requests can be retried, hence
       # why we keep track of the number of attempts.
       class RequestAttempt
-        attr_reader :attempts, :request
+        attr_reader :attempts, :request, :line_count
 
-        def initialize(req)
+        def initialize(req, line_count = nil)
           @attempts = 0
           @request = req
+          @line_count = line_count
         end
 
         def attempted!

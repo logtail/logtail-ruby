@@ -94,6 +94,26 @@ describe Logtail::LogDevices::HTTP do
       http.close
       expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - closing).to be < 1
     end
+
+    it "drops the lines written after it once Better Stack answered one of them with 429 or 5xx" do
+      stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return({status: 503}, {status: 202})
+      http.close
+
+      2.times { http.write(Logtail::LogEntry.new("INFO", Time.now, nil, "test log message", nil, nil)) }
+
+      expect(stub).to have_been_requested.once
+    end
+
+    it "reports a line written after it that Better Stack rejects" do
+      # A status is reported once per process, so none has been reported yet.
+      stub_const("Logtail::LogDevices::HTTP::REPORTED_REJECTIONS", [])
+      stub_request(:post, "https://in.logs.betterstack.com/").to_return(status: [403, "Forbidden"])
+      http.close
+      expect(http).to receive(:warn).once.with("Logtail: Better Stack rejected 1 log line with HTTP 403 " \
+        "Forbidden - check your source token. Further rejections with this status won't be reported.")
+
+      http.write(Logtail::LogEntry.new("INFO", Time.now, nil, "test log message", nil, nil))
+    end
   end
 
   # Testing a private method because it helps break down our tests
@@ -166,6 +186,41 @@ describe Logtail::LogDevices::HTTP do
 
       http.instance_variable_get(:@flush_thread).kill.join
       http.instance_variable_get(:@request_outlet_thread).kill.join
+    end
+
+    context "when Better Stack answers the delivery in the calling thread with an error status" do
+      let(:http) { described_class.new("MYKEY", flush_continuously: false) }
+
+      # A status is reported once per process, so none has been reported yet in each example.
+      before { stub_const("Logtail::LogDevices::HTTP::REPORTED_REJECTIONS", []) }
+
+      it "drops batches rejected with 401 and warns only once" do
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return(status: [401, "Unauthorized"])
+        expect(http).to receive(:warn).once.with("Logtail: Better Stack rejected 2 log lines with HTTP 401 " \
+          "Unauthorized - check your source token. Further rejections with this status won't be reported.")
+
+        2.times do
+          2.times { |i| http.write(Logtail::LogEntry.new("INFO", time, nil, "line #{i}", nil, nil)) }
+          http.flush
+        end
+
+        expect(stub).to have_been_requested.twice
+        http.close
+      end
+
+      it "neither retries nor reports a batch answered with 408, 429 or 5xx" do
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").
+          to_return({status: 503}, {status: 429}, {status: [408, "Request Time-out"]})
+        expect(http).not_to receive(:warn)
+
+        3.times do
+          http.write(Logtail::LogEntry.new("INFO", time, nil, "test log message", nil, nil))
+          http.flush
+        end
+
+        expect(stub).to have_been_requested.times(3)
+        http.close
+      end
     end
 
     it "waits up to 5 seconds for a slow host when it delivers in the calling thread" do
@@ -519,6 +574,106 @@ describe Logtail::LogDevices::HTTP do
 
         expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
         expect(waits).to eq([1, 2, 1, 2])
+      end
+    end
+
+    context "when Better Stack answers with an error status" do
+      # Raised to leave the outlet's endless loop, see above.
+      let(:stop_outlet) { Class.new(Exception) }
+      let(:http_device) { described_class.new("MYKEY", flush_continuously: false, requests_per_conn: 1) }
+      let(:request_queue) { http_device.instance_variable_get(:@request_queue) }
+      let(:waits) { [] }
+
+      before do
+        allow(http_device).to receive(:sleep) { |seconds| waits << seconds }
+        # Leave the loop once there is nothing left to deliver.
+        allow(request_queue).to receive(:deq).and_wrap_original { |deq| deq.call || raise(stop_outlet) }
+        # A status is reported once per process, so none has been reported yet in each example.
+        stub_const("Logtail::LogDevices::HTTP::REPORTED_REJECTIONS", [])
+      end
+
+      def queue_batch(size)
+        size.times { |i| http_device.write(Logtail::LogEntry.new("INFO", Time.now, nil, "line #{i}", nil, nil)) }
+        http_device.send(:flush_async)
+      end
+
+      it "retries a batch answered with 500 and delivers it once" do
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return({status: 500}, {status: 202})
+        queue_batch(1)
+
+        expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+        expect(stub).to have_been_requested.twice
+        expect(waits).to eq([1])
+      end
+
+      it "retries a batch answered with 408 without a warning, and delivers it once" do
+        # Better Stack answers 408 when a new connection stays unused for more than about 10 seconds
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").
+          to_return({status: [408, "Request Time-out"], headers: {"Connection" => "close"}}, {status: 202})
+        queue_batch(1)
+        expect(http_device).not_to receive(:warn)
+
+        expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+        expect(stub).to have_been_requested.twice
+        expect(waits).to eq([1])
+      end
+
+      it "waits before retrying a batch answered with 429 at least as long as Retry-After says" do
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").
+          to_return({status: 429, headers: {"Retry-After" => "3"}}, {status: 202})
+        queue_batch(1)
+
+        expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+        expect(stub).to have_been_requested.twice
+        expect(waits).to eq([3])
+      end
+
+      it "reads Retry-After as a date too, and waits 60 seconds at most" do
+        Timecop.freeze(Time.utc(2026, 10, 1, 12, 0, 0)) do
+          stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return(
+            {status: 503, headers: {"Retry-After" => (Time.now + 5).httpdate}},
+            {status: 503, headers: {"Retry-After" => "3600"}},
+            {status: 202}
+          )
+          queue_batch(1)
+
+          expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+          expect(stub).to have_been_requested.times(3)
+          expect(waits).to eq([5, 60])
+        end
+      end
+
+      it "drops a batch answered with 503 three times, backing off in between" do
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return(status: 503)
+        queue_batch(1)
+        expect(http_device).not_to receive(:warn)
+
+        expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+        expect(stub).to have_been_requested.times(3)
+        expect(waits).to eq([1, 2, 4])
+      end
+
+      it "drops batches answered with 401 and warns only once" do
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return(status: [401, "Unauthorized"])
+        queue_batch(2)
+        queue_batch(2)
+        expect(http_device).to receive(:warn).once.with("Logtail: Better Stack rejected 2 log lines with HTTP 401 " \
+          "Unauthorized - check your source token. Further rejections with this status won't be reported.")
+
+        expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+        expect(stub).to have_been_requested.twice
+        expect(waits).to eq([])
+      end
+
+      it "drops a batch answered with 413 and warns" do
+        stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return(status: [413, "Payload Too Large"])
+        queue_batch(1)
+
+        expect do
+          expect { http_device.send(:request_outlet) }.to raise_error(stop_outlet)
+        end.to output(/^Logtail: Better Stack rejected 1 log line with HTTP 413 Payload Too Large\. Further rejections with this status won't be reported\.$/).to_stderr
+        expect(stub).to have_been_requested.once
+        expect(waits).to eq([])
       end
     end
 

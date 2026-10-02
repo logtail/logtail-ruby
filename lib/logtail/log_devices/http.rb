@@ -1,6 +1,7 @@
 require "msgpack"
 require "net/https"
 require "set"
+require "time"
 require "zlib"
 
 require "logtail/config"
@@ -27,6 +28,10 @@ module Logtail
       MAX_UNTRACKED_DEPTH = 100 # nested hashes and arrays, see #encodable_value
       INITIAL_RECONNECT_WAIT = 1 # second
       MAX_RECONNECT_WAIT = 30 # seconds
+      MAX_RETRY_AFTER = 60 # seconds
+      # The HTTP statuses of rejected batches this process has warned about, see {#report_rejected_batch}.
+      REPORTED_REJECTIONS = []
+      REPORTED_REJECTIONS_LOCK = Mutex.new
       SYNCHRONOUS_DELIVERY_TIMEOUT = 5 # seconds, to connect and to read the response
 
       # Instantiates a new HTTP log device that can be passed to {Logtail::Logger#initialize}.
@@ -265,7 +270,7 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
         def dequeue_requests
           requests = []
           while @request_queue.size > 0 && (request_attempt = @request_queue.deq)
-            requests << request_attempt.request
+            requests << request_attempt
           end
           requests
         end
@@ -454,16 +459,18 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           req = build_request(msgs)
           if !req.nil?
             Logtail::Config.instance.debug { "New request placed on queue" }
-            request_attempt = RequestAttempt.new(req)
+            request_attempt = RequestAttempt.new(req, msgs.size)
             @request_queue.enq(request_attempt)
           end
         end
 
         # Sends the requests in the calling thread, for when no outlet thread delivers them.
-        # Returns whether all of them were sent. Errors only go to the debug log, also those that
-        # aren't StandardErrors (WebMock refuses to connect with one); signals are raised as usual.
-        def deliver_synchronously(requests)
-          return true if requests.empty?
+        # Returns whether all of them were delivered. A request answered with 408, 429 or 5xx isn't
+        # retried, nothing would deliver the retry; one rejected with any other status that isn't
+        # 2xx is reported like in {#deliver_requests}. Errors only go to the debug log, also those
+        # that aren't StandardErrors (WebMock refuses to connect with one); signals are raised as usual.
+        def deliver_synchronously(request_attempts)
+          return true if request_attempts.empty?
 
           http = build_http
           http.open_timeout = http.read_timeout = SYNCHRONOUS_DELIVERY_TIMEOUT
@@ -477,8 +484,16 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
             http.open_timeout = nil
             http.start
           end
-          requests.each { |request| @last_resp = http.request(request) }
-          true
+          delivered = true
+          request_attempts.each do |request_attempt|
+            resp = @last_resp = http.request(request_attempt.request)
+            next if resp.code.start_with?("2")
+
+            delivered = false
+            Logtail::Config.instance.debug { "Log delivery failed! status: #{resp.code}, body: #{resp.body}" }
+            report_rejected_batch(request_attempt, resp) unless resp.code == "408" || resp.code == "429" || resp.code.start_with?("5")
+          end
+          delivered
         rescue SignalException
           raise
         rescue Exception => e
@@ -528,7 +543,7 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           if @late_delivery_failed
             Logtail::Config.instance.debug { "Dropping #{msgs.size} log lines, an earlier synchronous delivery failed" }
           else
-            @late_delivery_failed = !deliver_synchronously([build_request(msgs)])
+            @late_delivery_failed = !deliver_synchronously([RequestAttempt.new(build_request(msgs), msgs.size)])
           end
           true
         end
@@ -577,9 +592,10 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
         end
 
         # Creates a loop that processes the `@request_queue` on an interval. After a failed
-        # connection it waits before reconnecting, twice as long after every consecutive
-        # failure up to {MAX_RECONNECT_WAIT}, so an unreachable host is not retried in a busy
-        # loop. A delivered request starts the wait over (see {#deliver_requests}).
+        # connection, or a 429 or 5xx response, it waits before reconnecting, twice as long after
+        # every consecutive failure up to {MAX_RECONNECT_WAIT}, so an unreachable host is not
+        # retried in a busy loop. A Retry-After header can make the wait longer. A delivered
+        # request starts the wait over (see {#deliver_requests}).
         def request_outlet
           loop do
             http = build_http
@@ -609,7 +625,8 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
         # Creates a loop that delivers requests over an open (kept alive) HTTP connection.
         # If the connection dies, the request is thrown back onto the queue and
         # the method returns. It is the responsibility of the caller to implement retries
-        # and establish a new connection.
+        # and establish a new connection. A 429 or 5xx response is handled the same way, and
+        # a request rejected with any other status is dropped (see {#report_rejected_batch}).
         def deliver_requests(conn)
           num_reqs = 0
 
@@ -632,16 +649,7 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
                 resp = conn.request(request_attempt.request)
               rescue => e
                 Logtail::Config.instance.debug { "#deliver_requests error: #{e.message}" }
-
-                # Throw the request back on the queue for a retry if it has been attempted less
-                # than 3 times
-                if request_attempt.attempts < 3
-                  Logtail::Config.instance.debug { "Request is being retried, #{request_attempt.attempts} previous attempts" }
-                  @request_queue.enq(request_attempt)
-                else
-                  Logtail::Config.instance.debug { "Request is being dropped, #{request_attempt.attempts} previous attempts" }
-                end
-
+                retry_or_drop(request_attempt)
                 return false
               ensure
                 @requests_in_flight -= 1
@@ -650,19 +658,68 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
               num_reqs += 1
 
               @last_resp = resp
-              @reconnect_wait = INITIAL_RECONNECT_WAIT
+              delivered = resp.code.start_with?("2")
 
               Logtail::Config.instance.debug do
-                if resp.code == "202"
+                if delivered
                   "Logs successfully sent! View your logs at https://telemetry.betterstack.com"
                 else
                   "Log delivery failed! status: #{resp.code}, body: #{resp.body}"
                 end
               end
+
+              # A request the server didn't read (408, which Better Stack also sends for a new
+              # connection that stayed unused too long), too many requests or a server error: retry
+              # the request like after a failed connection, without starting the wait over, and
+              # wait as long as Retry-After asks.
+              if resp.code == "408" || resp.code == "429" || resp.code.start_with?("5")
+                retry_or_drop(request_attempt)
+                @reconnect_wait = [@reconnect_wait, retry_after(resp)].max
+                return false
+              end
+
+              report_rejected_batch(request_attempt, resp) unless delivered
+              @reconnect_wait = INITIAL_RECONNECT_WAIT
             end
           end
 
           true
+        end
+
+        # Throws the request back on the queue for a retry if it has been attempted less
+        # than 3 times
+        def retry_or_drop(request_attempt)
+          if request_attempt.attempts < 3
+            Logtail::Config.instance.debug { "Request is being retried, #{request_attempt.attempts} previous attempts" }
+            @request_queue.enq(request_attempt)
+          else
+            Logtail::Config.instance.debug { "Request is being dropped, #{request_attempt.attempts} previous attempts" }
+          end
+        end
+
+        # The seconds to wait before a retry that the Retry-After header asks for, given in
+        # seconds or as an HTTP date, at most {MAX_RETRY_AFTER}. 0 without a valid header.
+        def retry_after(resp)
+          value = resp["Retry-After"].to_s.strip
+          seconds = value.match?(/\A\d+\z/) ? value.to_i : (Time.httpdate(value) - Time.now).ceil
+          seconds.clamp(0, MAX_RETRY_AFTER)
+        rescue ArgumentError
+          0
+        end
+
+        # Warns about a batch Better Stack rejected, once per HTTP status in this process. It
+        # goes to stderr, never to a Logtail logger, whose lines would be rejected the same way.
+        def report_rejected_batch(request_attempt, resp)
+          first_rejection = REPORTED_REJECTIONS_LOCK.synchronize do
+            !REPORTED_REJECTIONS.include?(resp.code) && REPORTED_REJECTIONS.push(resp.code)
+          end
+          return unless first_rejection
+
+          lines = request_attempt.line_count
+          status = "HTTP #{resp.code} #{resp.message}".strip
+          hint = " - check your source token" if resp.code == "401" || resp.code == "403"
+          warn("Logtail: Better Stack rejected #{lines || "some"} log #{lines == 1 ? "line" : "lines"} " \
+            "with #{status}#{hint}. Further rejections with this status won't be reported.")
         end
 
         # Builds the `Authorization` header value for HTTP delivery to the Logtail API.
