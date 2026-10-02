@@ -110,6 +110,93 @@ describe Logtail::LogDevices::HTTP do
       http.send(:flush)
       http.close
     end
+
+    it "delivers in the calling thread when no outlet thread runs" do
+      messages = []
+      stub = stub_request(:post, "https://in.logs.betterstack.com/").to_return do |request|
+        messages.concat(MessagePack.unpack(Zlib::Inflate.inflate(request.body)).map { |line| line["message"] })
+        { status: 202 }
+      end
+      http = described_class.new("MYKEY", flush_continuously: false)
+      http.write(Logtail::LogEntry.new("INFO", time, nil, "test log message 1", nil, nil))
+      http.write(Logtail::LogEntry.new("INFO", time, nil, "test log message 2", nil, nil))
+
+      http.flush
+
+      expect(stub).to have_been_requested.once
+      expect(messages).to eq(["test log message 1", "test log message 2"])
+      http.close
+    end
+
+    it "doesn't raise when delivering in the calling thread fails, whatever the error" do
+      http = described_class.new("MYKEY", flush_continuously: false)
+      http.write(Logtail::LogEntry.new("INFO", time, nil, "test log message", nil, nil))
+
+      # WebMock refuses to connect with an error that isn't a StandardError
+      expect { http.flush }.not_to raise_error
+      http.close
+    end
+
+    it "doesn't warn about @last_resp when it can't connect while Ruby shuts down, with warnings on" do
+      # Ruby 2.7 and older warn about an instance variable that is read before it's set
+      result = run_ruby(<<-RUBY)
+        $VERBOSE = true
+        require "logtail"
+        # Like Net::HTTP before Ruby 4.0 while Ruby shuts down: it can't start the thread that
+        # times out connecting
+        Net::HTTP.prepend(Module.new { def start(*); raise ThreadError, "can't alloc thread"; end })
+        http = Logtail::LogDevices::HTTP.new("token", flush_continuously: false, ingesting_host: "127.0.0.1", ingesting_port: 1, ingesting_scheme: "http")
+        logger = Logtail::Logger.new(http)
+        logger.info("line")
+        logger.flush
+      RUBY
+
+      expect(result.status).to be_success, result.stderr
+      expect(result.stderr).not_to include("@last_resp not initialized")
+    end
+
+    it "waits about 5 seconds at most for the outlet thread to deliver" do
+      allow_any_instance_of(Net::HTTP).to receive(:request) { sleep } # Better Stack never answers
+      http = described_class.new("MYKEY")
+      http.write(Logtail::LogEntry.new("INFO", time, nil, "test log message", nil, nil))
+
+      flushing = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      http.flush
+      expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - flushing).to be_between(4, 7)
+
+      http.instance_variable_get(:@flush_thread).kill.join
+      http.instance_variable_get(:@request_outlet_thread).kill.join
+    end
+
+    it "waits up to 5 seconds for a slow host when it delivers in the calling thread" do
+      # Takes 3 seconds to answer each request
+      slow_ingest = Class.new(LocalIngestServer) do
+        private
+
+        def serve(socket)
+          def socket.write(*)
+            sleep 3
+            super
+          end
+          super
+        end
+      end.new
+      result = run_ruby(<<-RUBY)
+        require "logtail"
+        # A request per line, which flush delivers as no outlet thread runs
+        http = Logtail::LogDevices::HTTP.new("token", flush_continuously: false, batch_size: 1, #{slow_ingest.device_options})
+        logger = Logtail::Logger.new(http)
+        logger.info("first line")
+        logger.info("second line")
+        logger.flush
+      RUBY
+
+      # A request that times out would drop the one after it
+      expect(result.status).to be_success, result.stderr
+      expect(slow_ingest.messages).to contain_exactly("first line", "second line")
+    ensure
+      slow_ingest.stop if slow_ingest
+    end
   end
 
   # Testing a private method because it helps break down our tests

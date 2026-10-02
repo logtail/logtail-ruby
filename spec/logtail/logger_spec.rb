@@ -250,6 +250,30 @@ describe Logtail::Logger do
     end
   end
 
+  describe "#flush" do
+    let(:device) { Logtail::LogDevices::HTTP.new("my_source_token") }
+    let(:extra_device) { Logtail::LogDevices::HTTP.new("my_source_token") }
+    let(:logger) { Logtail::Logger.new(device, extra_device) }
+
+    it "flushes the log devices, so that what was logged is delivered" do
+      expect(device).to receive(:flush)
+      expect(extra_device).to receive(:flush)
+      logger.flush
+    end
+
+    it "returns right away when Rails flushes it after every request" do
+      # Stands in for ActiveSupport::LogSubscriber.flush_all!, which calls Rails.logger.flush
+      log_subscriber = Module.new do
+        def self.flush_all!(logger)
+          logger.flush
+        end
+      end
+      expect(device).not_to receive(:flush)
+      expect(extra_device).not_to receive(:flush)
+      log_subscriber.flush_all!(logger)
+    end
+  end
+
   describe "#formatter=" do
     it "should not allow changing the formatter when the device is HTTP" do
       http_device = Logtail::LogDevices::HTTP.new("source_token")

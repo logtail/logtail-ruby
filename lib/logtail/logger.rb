@@ -220,6 +220,21 @@ module Logtail
       super
     end
 
+    # Delivers what was logged so far before it returns, waiting about 5 seconds at most with
+    # the HTTP log device. Call it before a process ends with `exit!`, which skips the at_exit
+    # hook that delivers the rest, as Resque's forked job processes do.
+    #
+    # Rails calls `flush` on Rails.logger after every request (ActiveSupport::LogSubscriber.flush_all!).
+    # Waiting there would hold up every request, so that call returns right away and the lines
+    # are delivered in the background as usual.
+    def flush
+      return true if caller_locations(1, 10).any? { |location| location.base_label == "flush_all!" }
+
+      @logdev.dev.flush if @logdev && @logdev.dev.respond_to?(:flush)
+      @extra_loggers.each { |logger| logger.flush if logger.respond_to?(:flush) }
+      true
+    end
+
     # @private
     def with_context(context, &block)
       Logtail::CurrentContext.with(context, &block)
