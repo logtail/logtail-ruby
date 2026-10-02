@@ -12,7 +12,7 @@ module Logtail
         @error_message = attributes[:error_message]
 
         if attributes[:backtrace]
-          @backtrace_json = attributes[:backtrace].to_json
+          @backtrace_json = Util.generate_json(attributes[:backtrace])
         end
       end
 

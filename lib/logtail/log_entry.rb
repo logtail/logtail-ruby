@@ -35,7 +35,10 @@ module Logtail
       # This follows the default behavior set by ::Logger
       # See: https://github.com/ruby/ruby/blob/trunk/lib/logger.rb#L615
       @message = message.is_a?(String) ? message : message.inspect
+      truncated = @message.bytesize > MESSAGE_MAX_BYTES
       @message = @message.byteslice(0, MESSAGE_MAX_BYTES)
+      # The cut can split a multibyte character in two, drop the part that is left
+      @message.scrub!("") if truncated
       @tags = options[:tags]
       @context_snapshot = context_snapshot
       @event = event
@@ -59,13 +62,16 @@ module Logtail
         hash.merge!(event)
       end
 
-      if !context_snapshot.nil? && context_snapshot.length > 0
-        hash[:context] = context_snapshot
-      end
+      context = context_snapshot || {}
+      context = context.merge(runtime: (context[:runtime] || {}).merge(@runtime_context))
 
-      hash[:context] ||= {}
-      hash[:context][:runtime] ||= {}
-      hash[:context][:runtime].merge!(@runtime_context)
+      # A `context` Hash logged with the line is deep-merged into the gem's context, whose own
+      # values (system, runtime, http, user, session, ...) win on conflict. Other values are ignored.
+      if hash[:context].is_a?(Hash)
+        hash[:context] = merge_user_context(context, hash[:context])
+      else
+        hash[:context] = context
+      end
 
       if options[:only]
         hash.select do |key, _value|
@@ -85,7 +91,7 @@ module Logtail
     end
 
     def to_json(options = {})
-      to_hash.to_json
+      Util.generate_json(to_hash)
     end
 
     def to_msgpack(*args)
@@ -151,6 +157,12 @@ module Logtail
         else
           base_file = caller_locations.last.absolute_path
           Pathname.new(File.dirname(base_file || '/'))
+        end
+      end
+
+      def merge_user_context(context, user_context)
+        context.merge(user_context) do |_key, value, user_value|
+          value.is_a?(Hash) && user_value.is_a?(Hash) ? merge_user_context(value, user_value) : value
         end
       end
   end

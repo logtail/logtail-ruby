@@ -78,6 +78,19 @@ describe Logtail::Logger do
       expect(io.string).to eq("")
     end
 
+    # Ruby's Logger formats these severities as "ANY"
+    it "should log a nil severity at the unknown level" do
+      logger.add(nil, "log message")
+      expect(io.string).to include("log message")
+      expect(io.string).to include('"level":"unknown"')
+    end
+
+    it "should log a severity above UNKNOWN at the unknown level" do
+      logger.add(99, "log message")
+      expect(io.string).to include("log message")
+      expect(io.string).to include('"level":"unknown"')
+    end
+
     it "should not lose message when logging hashes with multiple io devices" do
       io1 = StringIO.new
       io2 = StringIO.new
@@ -147,6 +160,20 @@ describe Logtail::Logger do
         expect(tags).to eq(["tag1", "tag2"])
       end
 
+      it "should allow a single String in :tags" do
+        logger.info("event complete", tags: "tag1")
+        expect(io.string).to include("\"tags\":[\"tag1\"]")
+      end
+
+      it "should skip nil tags" do
+        logger.info("event complete", tag: nil, tags: nil)
+        logger.info("event complete", tags: ["tag1", nil])
+        lines = io.string.lines
+        expect(lines[0]).to start_with("event complete @metadata")
+        expect(lines[0]).not_to include("\"tags\"")
+        expect(lines[1]).to include("\"tags\":[\"tag1\"]")
+      end
+
       it "should allow functions" do
         logger.info do
           {message: "payment rejected", payment_rejected: {customer_id: "abcde1234", amount: 100}}
@@ -179,6 +206,21 @@ describe Logtail::Logger do
     end
   end
 
+  describe "#<<" do
+    it "logs the line at the info level" do
+      http_device = Logtail::LogDevices::HTTP.new("MYKEY", flush_continuously: false)
+      logger = Logtail::Logger.new(http_device)
+
+      logger << "appended line\n"
+
+      http_device.send(:flush_async)
+      request = http_device.instance_variable_get(:@request_queue).deq.request
+      entries = MessagePack.unpack(Zlib::Inflate.inflate(request.body))
+      expect(entries.size).to eq(1)
+      expect(entries[0]).to include("level" => "info", "message" => "appended line")
+    end
+  end
+
   describe "#error" do
     let(:io) { StringIO.new }
     let(:logger) { Logtail::Logger.new(io) }
@@ -194,6 +236,17 @@ describe Logtail::Logger do
       expect(io.string).to include("log message")
       expect(io.string).to include('"level":"error"')
       expect(io.string).to include('"tags":["tag"]')
+    end
+  end
+
+  describe "#unknown" do
+    let(:io) { StringIO.new }
+    let(:logger) { Logtail::Logger.new(io) }
+
+    it "should allow default usage" do
+      logger.unknown("log message")
+      expect(io.string).to include("log message")
+      expect(io.string).to include('"level":"unknown"')
     end
   end
 
