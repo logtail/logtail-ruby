@@ -88,7 +88,7 @@ module Logtail
     end
 
     def to_json(options = {})
-      to_hash.to_json
+      Util.generate_json(to_hash)
     end
 
     def to_msgpack(*args)
