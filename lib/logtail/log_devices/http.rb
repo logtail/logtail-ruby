@@ -215,7 +215,10 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
 
         def force_utf8_encoding(data)
           if data.respond_to?(:force_encoding)
-            # Only valid UTF-8 may leave: Better Stack stores anything else as invalid JSON.
+            # Only valid UTF-8 may leave: Better Stack stores anything else as invalid JSON. A string
+            # that is valid UTF-8 already, as nearly all are, is sent as it is.
+            return data if data.valid_encoding? && (data.encoding == Encoding::UTF_8 || data.encoding == Encoding::US_ASCII)
+
             case data.encoding
             when Encoding::UTF_8, Encoding::BINARY, Encoding::US_ASCII
               data.dup.force_encoding('UTF-8').scrub
