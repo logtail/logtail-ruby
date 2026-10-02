@@ -12,6 +12,7 @@ require File.join(File.dirname(__FILE__), 'support', 'socket_hostname')
 require File.join(File.dirname(__FILE__), 'support', 'timecop')
 require File.join(File.dirname(__FILE__), 'support', 'webmock')
 require File.join(File.dirname(__FILE__), 'support', 'logtail')
+require File.join(File.dirname(__FILE__), 'support', 'processes')
 
 RSpec::Support::ObjectFormatter.default_instance.max_formatted_output_length = 5_000
 

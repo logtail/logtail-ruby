@@ -27,6 +27,7 @@ module Logtail
       MAX_UNTRACKED_DEPTH = 100 # nested hashes and arrays, see #encodable_value
       INITIAL_RECONNECT_WAIT = 1 # second
       MAX_RECONNECT_WAIT = 30 # seconds
+      SYNCHRONOUS_DELIVERY_TIMEOUT = 5 # seconds, to connect and to read the response
 
       # Instantiates a new HTTP log device that can be passed to {Logtail::Logger#initialize}.
       #
@@ -88,7 +89,14 @@ module Logtail
         @request_queue = options[:request_queue] || FlushableDroppingSizedQueue.new(25)
         @successive_error_count = 0
         @requests_in_flight = 0
+        @last_resp = nil
         @reconnect_wait = INITIAL_RECONNECT_WAIT
+        @closed = false
+        @late_delivery_failed = false
+
+        # Delivers what is still buffered when the process exits. One hook per device, however
+        # many loggers write to it.
+        at_exit { close }
       end
 
       # Write a new log line message to the buffer, and flush asynchronously if the
@@ -101,12 +109,21 @@ module Logtail
         return unless Logtail.config.send_to_better_stack?(msg)
 
         @msg_queue.enq(msg)
+        # No thread delivers what is written after #close, e.g. by an at_exit hook that runs
+        # after the device's own.
+        return deliver_late_lines if @closed
 
         # Lazily start flush threads to ensure threads are alive after forking processes.
         # If the threads are started during instantiation they will not be copied when
         # the current process is forked. This is the case with various web servers,
         # such as phusion passenger.
-        ensure_flush_threads_are_started
+        begin
+          ensure_flush_threads_are_started
+        rescue ThreadError
+          # Ruby refuses new threads while it shuts down, e.g. to a thread that logs in an
+          # `ensure` block as it is killed at exit.
+          return deliver_late_lines
+        end
 
         if @msg_queue.full?
           Logtail::Config.instance.debug { "Flushing HTTP buffer via write" }
@@ -124,8 +141,12 @@ module Logtail
         true
       end
 
-      # Closes the log device, cleans up, and attempts one last delivery.
+      # Closes the log device, cleans up, and attempts one last delivery. Closing it again does
+      # nothing; lines written after it are delivered right away (see {#write}).
       def close
+        return if @closed
+        @closed = true
+
         # Kill the flush thread immediately since we are about to flush again.
         @flush_thread.kill.join if @flush_thread
 
@@ -394,6 +415,35 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           end
         end
 
+        # Sends the requests in the calling thread, for when no outlet thread delivers them.
+        # Returns whether all of them were sent. Errors only go to the debug log, also those that
+        # aren't StandardErrors (WebMock refuses to connect with one); signals are raised as usual.
+        def deliver_synchronously(requests)
+          return true if requests.empty?
+
+          http = build_http
+          http.open_timeout = http.read_timeout = SYNCHRONOUS_DELIVERY_TIMEOUT
+          begin
+            http.start
+          rescue ThreadError
+            # While Ruby shuts down it refuses new threads, and Net::HTTP (before Ruby 4.0) needs
+            # one to time out connecting. Then it connects without a timeout, but only to a host
+            # that has answered before.
+            raise if @last_resp.nil?
+            http.open_timeout = nil
+            http.start
+          end
+          requests.each { |request| @last_resp = http.request(request) }
+          true
+        rescue SignalException
+          raise
+        rescue Exception => e
+          Logtail::Config.instance.debug { "Synchronous delivery failed: #{e.message}" }
+          false
+        ensure
+          http.finish if http && http.started?
+        end
+
         # Waits on the request queue. This is used in {#flush} to ensure
         # the log data has been delivered before returning.
         def wait_on_request_queue
@@ -403,12 +453,40 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
               Logtail::Config.instance.debug { "Request queue is empty and no requests are in flight, finish waiting" }
               return true
             end
+            if outlet_stalled?
+              Logtail::Config.instance.debug { "The HTTP outlet can't deliver the requests, finish waiting" }
+              return false
+            end
             Logtail::Config.instance.debug do
               "Request size #{@request_queue.size}, reqs in-flight #{@requests_in_flight}, " \
                 "continue waiting (iteration #{i + 1})"
             end
             sleep 0.5
           end
+        end
+
+        # Whether the outlet thread can't deliver anything while {#close} waits for it: the thread
+        # is dead, or the host has never answered and the outlet has already waited to reconnect
+        # after a failed connection (@reconnect_wait grows after each wait until a response).
+        def outlet_stalled?
+          return true unless @request_outlet_thread && @request_outlet_thread.alive?
+
+          @last_resp.nil? && @reconnect_wait > INITIAL_RECONNECT_WAIT
+        end
+
+        # Delivers the buffered lines in the calling thread, for {#write} when no thread can. After
+        # a delivery fails, e.g. to an unreachable host, later lines are dropped so they can't
+        # hold up the exit one by one.
+        def deliver_late_lines
+          msgs = @msg_queue.flush
+          return true if msgs.empty?
+
+          if @late_delivery_failed
+            Logtail::Config.instance.debug { "Dropping #{msgs.size} log lines, an earlier synchronous delivery failed" }
+          else
+            @late_delivery_failed = !deliver_synchronously([build_request(msgs)])
+          end
+          true
         end
 
         # Flushes the message queue on an interval. You will notice that {#write} also
@@ -496,13 +574,15 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
               Logtail::Config.instance.debug { "Waiting on next request, threads waiting: #{@request_queue.size}" }
             end
 
+            # Counted as in flight before it leaves the queue, so close never sees neither
+            @requests_in_flight += 1
             request_attempt = @request_queue.deq
 
             if request_attempt.nil?
+              @requests_in_flight -= 1
               sleep(1)
             else
               request_attempt.attempted!
-              @requests_in_flight += 1
 
               begin
                 resp = conn.request(request_attempt.request)
