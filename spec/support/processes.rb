@@ -5,11 +5,13 @@ require "tmpdir"
 require "zlib"
 
 # A local stand-in for the Better Stack ingesting host, for tests that run logtail in a separate
-# process: it answers every request with 202 and records the message of every line it receives.
+# process: it answers every request with 202 and records the message of every line it receives,
+# and how many lines each request held.
 class LocalIngestServer
   def initialize
     @server = TCPServer.new("127.0.0.1", 0)
     @messages = []
+    @batch_sizes = []
     @lock = Mutex.new
     @connections = []
     @thread = Thread.new do
@@ -24,6 +26,10 @@ class LocalIngestServer
 
   def messages
     @lock.synchronize { @messages.dup }
+  end
+
+  def batch_sizes
+    @lock.synchronize { @batch_sizes.dup }
   end
 
   def stop
@@ -42,7 +48,10 @@ class LocalIngestServer
         headers[name.downcase] = value.strip
       end
       lines = MessagePack.unpack(Zlib::Inflate.inflate(socket.read(headers["content-length"].to_i)))
-      @lock.synchronize { @messages.concat(lines.map { |line| line["message"] }) }
+      @lock.synchronize do
+        @messages.concat(lines.map { |line| line["message"] })
+        @batch_sizes << lines.size
+      end
       socket.write("HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n")
     end
   rescue IOError, SystemCallError

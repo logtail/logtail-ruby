@@ -49,6 +49,21 @@ describe Logtail::LogDevices::HTTP, "after a fork" do
     expect(ingest.messages).to eq(["parent line before the fork"])
   end
 
+  it "batches a child's lines as usual when the parent closed the device before forking" do
+    result = run_ruby(<<-RUBY)
+      require "logtail"
+      logger = Logtail::Logger.new(Logtail::LogDevices::HTTP.new("token", flush_interval: 60, #{ingest.device_options}))
+      logger.info("parent line")
+      logger.close
+      Process.wait(fork { 3.times { |n| logger.info("child line " + n.to_s) } })
+    RUBY
+
+    expect(result.status).to be_success, result.stderr
+    expect(ingest.messages).to contain_exactly("parent line", "child line 0", "child line 1", "child line 2")
+    # Lines written after close are each delivered on their own, see Logtail::LogDevices::HTTP#write
+    expect(ingest.batch_sizes).to eq([1, 3])
+  end
+
   it "delivers a child's lines when it calls flush before leaving with exit!, which skips at_exit hooks" do
     result = run_ruby(<<-RUBY)
       require "logtail"
