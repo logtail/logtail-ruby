@@ -421,13 +421,15 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
               Logtail::Config.instance.debug { "Waiting on next request, threads waiting: #{@request_queue.size}" }
             end
 
+            # Counted as in flight before it leaves the queue, so close never sees neither
+            @requests_in_flight += 1
             request_attempt = @request_queue.deq
 
             if request_attempt.nil?
+              @requests_in_flight -= 1
               sleep(1)
             else
               request_attempt.attempted!
-              @requests_in_flight += 1
 
               begin
                 resp = conn.request(request_attempt.request)
