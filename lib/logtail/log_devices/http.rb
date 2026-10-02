@@ -24,6 +24,7 @@ module Logtail
       CONTENT_TYPE = "application/msgpack".freeze
       USER_AGENT = "Logtail Ruby/#{Logtail::VERSION} (HTTP)".freeze
       ENCODABLE_INTEGERS = (-2**63...2**64).freeze # the integers msgpack can encode
+      MAX_UNTRACKED_DEPTH = 100 # nested hashes and arrays, see #encodable_value
       INITIAL_RECONNECT_WAIT = 1 # second
       MAX_RECONNECT_WAIT = 30 # seconds
 
@@ -213,16 +214,19 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           req['Content-Encoding'] = 'deflate'
           req['User-Agent'] = USER_AGENT
           # Entries are encoded one at a time, so one that can't be encoded doesn't lose the batch.
-          uncompressed = MessagePack::Packer.new.write_array_header(msgs.size).to_s +
-            msgs.map { |msg| encode_log_entry(msg) }.join
+          packer = MessagePack::DefaultFactory.packer
+          uncompressed = packer.write_array_header(msgs.size).to_s
+          packer.reset
+          msgs.each { |msg| uncompressed << encode_log_entry(msg, packer) }
           req.body = Zlib::Deflate.deflate(uncompressed, Zlib::BEST_SPEED)
           req
         end
 
-        # Encodes a single log entry with msgpack. An entry that still can't be encoded is
-        # replaced by one that says why, with the same level and time.
-        def encode_log_entry(msg)
-          force_utf8_encoding(encodable_value(msg.to_hash)).to_msgpack
+        # Encodes a single log entry with msgpack, with the packer if given, which it leaves empty.
+        # An entry that still can't be encoded is replaced by one that says why, with the same
+        # level and time.
+        def encode_log_entry(msg, packer = MessagePack::DefaultFactory.packer)
+          packer.write(encodable_value(msg.to_hash)).to_s
         rescue StandardError, SystemStackError => e
           Logtail::Config.instance.debug { "Could not encode log entry: #{e.inspect}" }
           error = force_utf8_encoding("#{e.class}: #{e.message}")
@@ -232,30 +236,106 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
             dt: msg.time.iso8601(LogEntry::DT_PRECISION),
             message: message.byteslice(0, LogEntry::MESSAGE_MAX_BYTES).scrub(""),
           }.to_msgpack
+        ensure
+          packer.reset
         end
 
-        # Converts what msgpack can't encode, recursively, mostly into strings. A hash or array
-        # that contains itself is cut off with "[circular]".
-        def encodable_value(value, parents = {}.compare_by_identity)
-          case value
-          when String, Symbol, Float, true, false, nil
-            value
-          when Integer
-            ENCODABLE_INTEGERS.cover?(value) ? value : value.to_s
-          when Hash, Array, Set, Struct
-            return "[circular]" if parents.key?(value)
+        # Converts what msgpack can't encode, recursively, mostly into strings, and passes strings
+        # that aren't valid UTF-8 to {#force_utf8_encoding}. Returns the value itself when nothing
+        # needs to change, as for most log lines, and otherwise copies only the hashes and arrays
+        # that change. A hash or array that contains itself is cut off with "[circular]".
+        def encodable_value(value)
+          # The first pass doesn't keep track of the hashes and arrays it is in, and gives up when
+          # they nest too deep, as in a cycle. The second pass keeps track of them to find cycles.
+          catch(:too_deep) { return replacement_for(value, nil, 0) || value }
+          replacement_for(value, {}.compare_by_identity, 0) || value
+        end
 
-            parents[value] = true
-            encodable =
-              if value.is_a?(Array) || value.is_a?(Set)
-                value.map { |item| encodable_value(item, parents) }
+        # Returns what to send instead of the value, or nil to send the value as it is.
+        def replacement_for(value, parents, depth)
+          case value
+          when Hash
+            hash_replacement(value, parents, depth)
+          when String
+            force_utf8_encoding(value) unless value.valid_encoding? && (value.encoding == Encoding::UTF_8 || value.encoding == Encoding::US_ASCII)
+          when Integer
+            value.to_s unless value.bit_length < 64 || ENCODABLE_INTEGERS.cover?(value)
+          when nil, true, false, Symbol, Float
+            nil
+          when Array, Set, Struct
+            if parents
+              return "[circular]" if parents.key?(value)
+
+              parents[value] = true
+            elsif depth == MAX_UNTRACKED_DEPTH
+              throw :too_deep
+            end
+            replacement =
+              if value.is_a?(Array)
+                array_replacement(value, parents, depth + 1)
+              elsif value.is_a?(Set)
+                array_replacement(items = value.to_a, parents, depth + 1) || items
               else
-                value.to_h.each_with_object({}) do |(key, item), hash|
-                  hash[encodable_value(key, parents)] = encodable_value(item, parents)
-                end
+                hash_replacement(members = value.to_h, parents, depth + 1) || members
               end
-            parents.delete(value)
-            encodable
+            parents.delete(value) if parents
+            replacement
+          else
+            force_utf8_encoding(converted_value(value))
+          end
+        end
+
+        # Returns a copy of the hash with the replacements for its keys and values, or nil if none
+        # needs one. The most common keys and values are checked right here, which is faster.
+        def hash_replacement(hash, parents, depth)
+          if parents
+            return "[circular]" if parents.key?(hash)
+
+            parents[hash] = true
+          elsif depth == MAX_UNTRACKED_DEPTH
+            throw :too_deep
+          end
+          copy = nil
+          key_changes = false
+          hash.each_pair do |key, item|
+            new_key = replacement_for(key, parents, depth + 1) unless key.is_a?(Symbol)
+            new_item =
+              if item.is_a?(String)
+                force_utf8_encoding(item) unless item.valid_encoding? && (item.encoding == Encoding::UTF_8 || item.encoding == Encoding::US_ASCII)
+              elsif item.is_a?(Hash)
+                hash_replacement(item, parents, depth + 1)
+              elsif !(item.nil? || item.is_a?(Integer) && item.bit_length < 64 || item.is_a?(Symbol) || item.is_a?(Float))
+                replacement_for(item, parents, depth + 1)
+              end
+            if new_key
+              key_changes = true
+              break
+            elsif new_item
+              (copy ||= Hash[hash])[key] = new_item
+            end
+          end
+          # A key that changes is rare, the copy is then built from scratch to keep the order of the keys
+          if key_changes
+            copy = {}
+            hash.each_pair { |key, item| copy[replacement_for(key, parents, depth + 1) || key] = replacement_for(item, parents, depth + 1) || item }
+          end
+          parents.delete(hash) if parents
+          copy
+        end
+
+        # Returns a copy of the array with the replacements for its items, or nil if none needs one.
+        def array_replacement(array, parents, depth)
+          copy = nil
+          array.each_with_index do |item, index|
+            new_item = replacement_for(item, parents, depth)
+            (copy ||= Array.new(array))[index] = new_item if new_item
+          end
+          copy
+        end
+
+        # Converts a value msgpack can't encode that isn't a hash, array, set or struct.
+        def converted_value(value)
+          case value
           when Time, DateTime # Rails makes ActiveSupport::TimeWithZone match Time too
             value.to_time.getutc.iso8601(LogEntry::DT_PRECISION)
           when Date
@@ -266,7 +346,8 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
             # BigDecimal#to_s would use an exponent, "0.1999e2"
             defined?(::BigDecimal) && value.is_a?(::BigDecimal) ? value.to_s("F") : value.to_s
           else
-            value.to_s
+            # The public id of a Rack::Session::SessionId is the cookie of a server-side session
+            value.respond_to?(:private_id) ? value.private_id : value.to_s
           end
         end
 

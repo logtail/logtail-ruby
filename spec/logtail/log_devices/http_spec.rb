@@ -204,8 +204,8 @@ describe Logtail::LogDevices::HTTP do
       logger.info("line", items: [in_array], counts: { key => 1 })
       delivered_entries
 
-      expect(http).to have_received(:force_utf8_encoding).with(in_array)
-      expect(http).to have_received(:force_utf8_encoding).with(key)
+      expect(http).to have_received(:force_utf8_encoding).with(in_array).at_least(:once)
+      expect(http).to have_received(:force_utf8_encoding).with(key).at_least(:once)
     end
 
     it "keeps the order of the keys of a hash when it converts some of them" do
