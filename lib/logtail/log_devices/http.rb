@@ -381,9 +381,11 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
                 end
               end
 
-              # Too many requests or a server error: retry the request like after a failed
-              # connection, without starting the wait over, and wait as long as Retry-After asks.
-              if resp.code == "429" || resp.code.start_with?("5")
+              # A request the server didn't read (408, which Better Stack also sends for a new
+              # connection that stayed unused too long), too many requests or a server error: retry
+              # the request like after a failed connection, without starting the wait over, and
+              # wait as long as Retry-After asks.
+              if resp.code == "408" || resp.code == "429" || resp.code.start_with?("5")
                 retry_or_drop(request_attempt)
                 @reconnect_wait = [@reconnect_wait, retry_after(resp)].max
                 return false
