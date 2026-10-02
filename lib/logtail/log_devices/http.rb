@@ -155,6 +155,7 @@ module Logtail
       # Closes the log device, cleans up, and attempts one last delivery. Closing it again does
       # nothing; lines written after it are delivered right away (see {#write}).
       def close
+        reset_if_forked
         return if @closed
         @closed = true
 
@@ -240,7 +241,8 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
         # The queues and threads belong to the process that created them. After a fork, the
         # parent still delivers the lines it buffered, so a child that kept them would send them
         # again, and the parent's threads don't run in the child. The child starts over with
-        # empty queues and starts its own threads once it logs.
+        # empty queues and starts its own threads once it logs, also when the parent closed the
+        # device before forking.
         def reset_if_forked
           return if @pid == Process.pid
 
@@ -253,6 +255,7 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
             @flush_thread = @request_outlet_thread = nil
             @requests_in_flight = 0
             @reconnect_wait = INITIAL_RECONNECT_WAIT
+            @closed = @late_delivery_failed = false
             @pid = Process.pid
           end
         end
