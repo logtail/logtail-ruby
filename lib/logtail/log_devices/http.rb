@@ -270,7 +270,7 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
         def dequeue_requests
           requests = []
           while @request_queue.size > 0 && (request_attempt = @request_queue.deq)
-            requests << request_attempt.request
+            requests << request_attempt
           end
           requests
         end
@@ -465,10 +465,12 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
         end
 
         # Sends the requests in the calling thread, for when no outlet thread delivers them.
-        # Returns whether all of them were sent. Errors only go to the debug log, also those that
-        # aren't StandardErrors (WebMock refuses to connect with one); signals are raised as usual.
-        def deliver_synchronously(requests)
-          return true if requests.empty?
+        # Returns whether all of them were delivered. A request answered with 408, 429 or 5xx isn't
+        # retried, nothing would deliver the retry; one rejected with any other status that isn't
+        # 2xx is reported like in {#deliver_requests}. Errors only go to the debug log, also those
+        # that aren't StandardErrors (WebMock refuses to connect with one); signals are raised as usual.
+        def deliver_synchronously(request_attempts)
+          return true if request_attempts.empty?
 
           http = build_http
           http.open_timeout = http.read_timeout = SYNCHRONOUS_DELIVERY_TIMEOUT
@@ -482,8 +484,16 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
             http.open_timeout = nil
             http.start
           end
-          requests.each { |request| @last_resp = http.request(request) }
-          true
+          delivered = true
+          request_attempts.each do |request_attempt|
+            resp = @last_resp = http.request(request_attempt.request)
+            next if resp.code.start_with?("2")
+
+            delivered = false
+            Logtail::Config.instance.debug { "Log delivery failed! status: #{resp.code}, body: #{resp.body}" }
+            report_rejected_batch(request_attempt, resp) unless resp.code == "408" || resp.code == "429" || resp.code.start_with?("5")
+          end
+          delivered
         rescue SignalException
           raise
         rescue Exception => e
@@ -533,7 +543,7 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           if @late_delivery_failed
             Logtail::Config.instance.debug { "Dropping #{msgs.size} log lines, an earlier synchronous delivery failed" }
           else
-            @late_delivery_failed = !deliver_synchronously([build_request(msgs)])
+            @late_delivery_failed = !deliver_synchronously([RequestAttempt.new(build_request(msgs), msgs.size)])
           end
           true
         end
