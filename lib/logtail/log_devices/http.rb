@@ -24,7 +24,7 @@ module Logtail
       USER_AGENT = "Logtail Ruby/#{Logtail::VERSION} (HTTP)".freeze
       INITIAL_RECONNECT_WAIT = 1 # second
       MAX_RECONNECT_WAIT = 30 # seconds
-      SYNCHRONOUS_DELIVERY_TIMEOUT = 2 # seconds, to connect and to read the response
+      SYNCHRONOUS_DELIVERY_TIMEOUT = 5 # seconds, to connect and to read the response
 
       # Instantiates a new HTTP log device that can be passed to {Logtail::Logger#initialize}.
       #
