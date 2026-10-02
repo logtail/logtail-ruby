@@ -111,6 +111,24 @@ describe Logtail::LogDevices::HTTP do
       http.close
     end
 
+    it "doesn't warn about @last_resp when it can't connect while Ruby shuts down, with warnings on" do
+      # Ruby 2.7 and older warn about an instance variable that is read before it's set
+      result = run_ruby(<<-RUBY)
+        $VERBOSE = true
+        require "logtail"
+        # Like Net::HTTP before Ruby 4.0 while Ruby shuts down: it can't start the thread that
+        # times out connecting
+        Net::HTTP.prepend(Module.new { def start(*); raise ThreadError, "can't alloc thread"; end })
+        http = Logtail::LogDevices::HTTP.new("token", flush_continuously: false, ingesting_host: "127.0.0.1", ingesting_port: 1, ingesting_scheme: "http")
+        logger = Logtail::Logger.new(http)
+        logger.info("line")
+        logger.flush
+      RUBY
+
+      expect(result.status).to be_success, result.stderr
+      expect(result.stderr).not_to include("@last_resp not initialized")
+    end
+
     it "waits about 5 seconds at most for the outlet thread to deliver" do
       allow_any_instance_of(Net::HTTP).to receive(:request) { sleep } # Better Stack never answers
       http = described_class.new("MYKEY")
