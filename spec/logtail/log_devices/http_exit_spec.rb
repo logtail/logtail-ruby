@@ -36,6 +36,22 @@ describe Logtail::LogDevices::HTTP, "when the process exits" do
     expect(ingest.messages).to contain_exactly("logged before exit", "logged by a thread that Ruby kills at exit")
   end
 
+  it "doesn't warn about the instance variables it uses to close, with warnings on" do
+    # Ruby 2.7 and older warn about an instance variable that is read before it's set
+    result = run_ruby(<<-RUBY)
+      $VERBOSE = true
+      require "logtail"
+      logger = Logtail::Logger.new(Logtail::LogDevices::HTTP.new("token", #{ingest.device_options}))
+      logger.info("logged before close")
+      logger.close
+      logger.info("logged after close")
+    RUBY
+
+    expect(result.status).to be_success, result.stderr
+    expect(result.stderr).not_to match(/@(closed|late_delivery_failed|last_resp) not initialized/)
+    expect(ingest.messages).to contain_exactly("logged before close", "logged after close")
+  end
+
   it "delivers a line that an at_exit hook logs after the device closed" do
     result = run_ruby(<<-RUBY)
       require "logtail"
