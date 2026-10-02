@@ -119,6 +119,74 @@ describe Logtail::LogDevices::HTTP do
     end
   end
 
+  # Testing a private method because it helps break down our tests
+  describe "#force_utf8_encoding" do
+    let(:http) { described_class.new("MYKEY", flush_continuously: false) }
+    let(:logger) { Logtail::Logger.new(http) }
+
+    # Flushes the buffer and decodes the single entry in the request, the way the API reads it.
+    def delivered_entry
+      http.send(:flush_async)
+      request = http.instance_variable_get(:@request_queue).deq.request
+      MessagePack.unpack(Zlib::Inflate.inflate(request.body)).first
+    end
+
+    it "replaces invalid bytes in the message with U+FFFD" do
+      logger.info("invalid \xFF\xFE bytes")
+      expect(delivered_entry["message"]).to eq("invalid �� bytes")
+    end
+
+    it "treats a binary message as UTF-8" do
+      logger.info("caf\xC3\xA9 \xFF".b)
+      expect(delivered_entry["message"]).to eq("café �")
+    end
+
+    it "replaces invalid bytes in a nested field" do
+      logger.info("nested", user: { name: "An\xFFn" })
+      expect(delivered_entry["user"]).to eq("name" => "An�n")
+    end
+
+    it "replaces invalid bytes in array elements" do
+      logger.info("array", items: ["valid", "\xFF\xFE".b, ["in\xFFner"]])
+      expect(delivered_entry["items"]).to eq(["valid", "��", ["in�ner"]])
+    end
+
+    it "replaces invalid bytes in hash keys" do
+      logger.info("keys", counts: { "k\xFFy".b => 1 })
+      expect(delivered_entry["counts"]).to eq("k�y" => 1)
+    end
+
+    it "replaces invalid bytes in the context" do
+      Logtail.with_context(request: { path: "/caf\xE9".b }) { logger.info("context") }
+      expect(delivered_entry["context"]["request"]).to eq("path" => "/caf�")
+    end
+
+    it "converts strings in other encodings to UTF-8" do
+      logger.info("latin-1", city: "Montr\xE9al".dup.force_encoding("ISO-8859-1"))
+      expect(delivered_entry["city"]).to eq("Montréal")
+    end
+
+    it "sends valid UTF-8 for a string in an encoding Ruby can't convert" do
+      logger.info("windows-1258", word: "caf\xE9".dup.force_encoding("Windows-1258"))
+      word = delivered_entry["word"]
+      expect(word).to start_with("caf")
+      expect(word).to be_valid_encoding
+    end
+
+    it "sends a string that is valid UTF-8 already as it is, without a copy" do
+      utf8 = "café"
+      ascii = "ascii".encode("US-ASCII")
+
+      expect(http.send(:force_utf8_encoding, utf8)).to be(utf8)
+      expect(http.send(:force_utf8_encoding, ascii)).to be(ascii)
+    end
+
+    it "treats a US-ASCII string with bytes above 127 as UTF-8" do
+      logger.info("us-ascii", word: "caf\xC3\xA9 \xFF".dup.force_encoding("US-ASCII"))
+      expect(delivered_entry["word"]).to eq("café �")
+    end
+  end
+
   # Outlet
   describe "#request_outlet" do
     let(:time) { Time.utc(2016, 9, 1, 12, 0, 0) }

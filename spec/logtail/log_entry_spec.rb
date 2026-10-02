@@ -95,4 +95,15 @@ describe Logtail::LogEntry do
       end
     end
   end
+
+  describe "#message" do
+    it "cuts a long message on a character boundary" do
+      # The 4-byte emoji takes bytes 8,191 to 8,194, across the 8,192-byte limit.
+      message = "a" * 8190 + "\u{1F600} and more"
+      log_entry = described_class.new("INFO", time, nil, message, nil, nil)
+
+      expect(log_entry.message.bytesize).to eq(8190)
+      expect(log_entry.message.valid_encoding?).to be(true)
+    end
+  end
 end

@@ -35,7 +35,10 @@ module Logtail
       # This follows the default behavior set by ::Logger
       # See: https://github.com/ruby/ruby/blob/trunk/lib/logger.rb#L615
       @message = message.is_a?(String) ? message : message.inspect
+      truncated = @message.bytesize > MESSAGE_MAX_BYTES
       @message = @message.byteslice(0, MESSAGE_MAX_BYTES)
+      # The cut can split a multibyte character in two, drop the part that is left
+      @message.scrub!("") if truncated
       @tags = options[:tags]
       @context_snapshot = context_snapshot
       @event = event
