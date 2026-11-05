@@ -6,13 +6,16 @@
 # Include logtail library
 require "logtail"
 
-# Check for program arguments
-if ARGV.length != 2
-    puts "Program needs source token and ingesting host to run. Run the program as followed\nbundle exec ruby main.rb <source_token> <ingesting_host>"
-    exit
+# Read the source token and ingesting host from the environment
+source_token = ENV["BETTER_STACK_SOURCE_TOKEN"].to_s
+ingesting_host = ENV["BETTER_STACK_INGESTING_HOST"].to_s
+if source_token.empty? || ingesting_host.empty?
+    puts "Program needs source token and ingesting host to run. Run the program as followed\nBETTER_STACK_SOURCE_TOKEN=<source_token> BETTER_STACK_INGESTING_HOST=<ingesting_host> bundle exec ruby main.rb"
+    exit 1
 end
+
 # Create logger
-http_device = Logtail::LogDevices::HTTP.new(ARGV[0], ingesting_host: ARGV[1])
+http_device = Logtail::LogDevices::HTTP.new(source_token, ingesting_host: ingesting_host)
 logger = Logtail::Logger.new(http_device)
 
 # Filter logs that shouldn't be sent to Better Stack, see {Logtail::LogEntry} for available attributes
@@ -43,6 +46,21 @@ logger.info("This message will not be sent to Better Stack because it contains '
 logger.error("Oops! An error occurred!")
 
 # Send messages about fatal events that caused the app to crash using the fatal() method
-logger.fatal("Application crash! Needs to be fixed ASAP!")
+# Log a rescued exception with its class, message and backtrace as structured data
+begin
+    Integer("one hundred")
+rescue ArgumentError => exception
+    logger.fatal(
+        "Application crash! Needs to be fixed ASAP!",
+        error: {
+            class: exception.class.name,
+            message: exception.message,
+            backtrace: exception.backtrace
+        }
+    )
+end
+
+# Close the logger to send the remaining logs to Better Stack before the program ends
+logger.close
 
 puts "All done! You can check your logs now."

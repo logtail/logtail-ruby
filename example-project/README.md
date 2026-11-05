@@ -10,7 +10,7 @@ You can download the example project from GitHub directly or you can clone it to
 bundle install
 ```
 
-This will install all dependencies listed in the `Gemfile.lock` file.
+This will install the `logtail` gem the `Gemfile` asks for, with its dependencies.
 
 Alternatively, add `gem "logtail"` to your `Gemfile` manually and then run `bundle install`.
 
@@ -18,13 +18,13 @@ Alternatively, add `gem "logtail"` to your `Gemfile` manually and then run `bund
 
 _Don't forget to replace `<source_token>` and `<ingesting_host>` with your actual source token and ingesting host which you can find by going to **[Sources](https://telemetry.betterstack.com/team/0/sources) -> Configure** in Better Stack._ 
 
- To run the example application, run the following command adding your source token:
+ To run the example application, run the following command adding your source token and ingesting host:
 
 ```bash
-bundle exec ruby main.rb <source_token> <ingesting_host>
+BETTER_STACK_SOURCE_TOKEN=<source_token> BETTER_STACK_INGESTING_HOST=<ingesting_host> bundle exec ruby main.rb
 ```
 
-This will create a total of 5 different logs, each corresponding to a different log level. You can review these logs in Logtail.
+This will create a total of 5 different logs, each corresponding to a different log level, and skip one more that is filtered out. You can review these logs in Logtail.
 
 # Logging
 
