@@ -1,0 +1,293 @@
+name: E2E
+
+# Proves that the client still delivers logs to Better Stack. Every job creates its own ruby source through the
+# Telemetry API, warms it up, runs example-project/main.rb (what its README tells customers to run) with that source's
+# token and ingesting host, reads the stored rows back through the testing team's SQL API connection, checks them
+# exactly against e2e/expected.json (nothing missing, extra or duplicated, and the line the example filters out not
+# stored), and deletes the source again, together with sources of earlier runs left behind for more than 3 hours.
+# e2e/plan.rb plans three legs:
+#   floor   the oldest Ruby, msgpack and logger logtail.gemspec declares (required_ruby_version and the oldest
+#           releases its requirements accept)
+#   latest  the newest stable Ruby with the newest msgpack and logger releases
+#   canary  ruby-head with the newest msgpack and logger releases
+# The floor leg runs on the oldest Ubuntu image GitHub offers, latest and canary on ubuntu-latest, so a new runner image
+# is covered as well.
+# Every job installs exactly the planned versions and checks, before it creates a source, that the Ruby running, the
+# client (the gem built here, or rubygems.org on the schedule) and the msgpack and logger versions are the planned ones,
+# and writes them into its summary. Pushes to main and pull requests install the gem built from the checkout. The daily
+# schedule installs the newest release from rubygems.org, which is what a customer gets today. A failure on main or on
+# the schedule files a Linear issue (notify_linear_failure.yml), at low priority when only the canary failed.
+# Pull requests from forks run only the plan: they get no secrets, so they cannot create a source.
+#
+# Secrets: TEST_TEAM_TELEMETRY_API, TEST_TEAM_CONNECTION_USERNAME, TEST_TEAM_CONNECTION_PASSWORD (Better Stack's E2E
+# testing team), LINEAR_* (see notify_linear_failure.yml).
+#
+# One leg, or exact versions: Actions → E2E → Run workflow, pick the leg and optionally set ruby-version (e.g. 3.2.6 or
+# head), msgpack-version or logger-version, which replace the planned versions of every leg that runs. That is how a
+# failure is bisected to one release.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '45 6 * * *'
+  workflow_dispatch:
+    inputs:
+      leg:
+        description: 'Leg to run'
+        type: choice
+        options: [all, floor, latest, canary]
+        default: all
+      source:
+        description: 'checkout: the gem built from this checkout, as the Release workflow builds it. rubygems: its newest release on rubygems.org, what a customer installs'
+        type: choice
+        options: [checkout, rubygems]
+        default: checkout
+      ruby-version:
+        description: 'One Ruby version (e.g. 3.2.6 or head) instead of the planned one'
+        type: string
+      msgpack-version:
+        description: 'One exact msgpack version (e.g. 1.4.2) instead of the planned one'
+        type: string
+      logger-version:
+        description: 'One exact logger version (e.g. 1.5.3) instead of the planned one'
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # -eo pipefail: a failed ruby in front of a pipe fails the step.
+    shell: bash
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+
+    steps:
+      - name: "[Setup] Checkout code"
+        uses: actions/checkout@v7
+
+      - name: "[Setup] Ruby"
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ruby
+
+      - name: "[Test] plan_test.rb"
+        run: ruby e2e/plan_test.rb
+
+      - name: "[Setup] Plan the legs"
+        id: plan
+        env:
+          LEG: ${{ inputs.leg || 'all' }}
+          RUBY: ${{ inputs.ruby-version }}
+          MSGPACK: ${{ inputs.msgpack-version }}
+          LOGGER: ${{ inputs.logger-version }}
+          # The schedule tests what a customer installs today, pushes and pull requests test the checkout.
+          CLIENT_FROM: ${{ github.event_name == 'schedule' && 'rubygems' || inputs.source || 'checkout' }}
+        run: |
+          MATRIX=$(ruby e2e/plan.rb --leg "$LEG" --ruby "$RUBY" --msgpack "$MSGPACK" --logger "$LOGGER" --source "$CLIENT_FROM")
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          jq . <<<"$MATRIX"
+
+  test:
+    needs: plan
+    name: ${{ matrix.name }}
+    # Forks and Dependabot get no repository secrets, so their pull requests run only the plan.
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+
+    env:
+      LEG: ${{ matrix.leg }}
+      CLIENT_FROM: ${{ matrix.source }}
+      CLIENT: ${{ matrix.client }}
+      PLANNED_RUBY: ${{ matrix.ruby }}
+      PLANNED_MSGPACK: ${{ matrix.msgpack }}
+      PLANNED_LOGGER: ${{ matrix.logger }}
+
+    steps:
+      - name: "[Setup] Checkout code"
+        uses: actions/checkout@v7
+
+      - name: "[Setup] Ruby ${{ matrix.ruby }}"
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+
+      # Exact versions, so that a release that does not support this Ruby fails here and names itself, instead of an
+      # older one being installed quietly.
+      - name: "[Setup] Install msgpack and logger at the leg's versions"
+        run: |
+          gem install --no-document msgpack -v "$PLANNED_MSGPACK"
+          gem install --no-document logger -v "$PLANNED_LOGGER"
+
+      - name: "[Setup] Install the client"
+        run: |
+          if [ "$CLIENT_FROM" = rubygems ]; then
+            gem install --no-document logtail -v "$CLIENT"
+          else
+            # The gem the Release workflow builds and pushes to rubygems.org.
+            gem build logtail.gemspec
+            gem install --no-document --local "logtail-$CLIENT.gem"
+          fi
+
+      # The example's Gemfile asks for logtail from rubygems.org, as a customer's does. The job pins it in place to
+      # the gem installed above, adds msgpack and logger at the leg's versions, and bundles with --local: bundler then
+      # resolves from the installed gems only and cannot fetch a release of the same version from rubygems.org.
+      - name: "[Setup] Bundle the example with these versions"
+        working-directory: example-project
+        run: |
+          grep -q '^gem "logtail"' Gemfile || { echo '::error::example-project/Gemfile has no gem "logtail" line to pin.'; exit 1; }
+          sed -i "s/^gem \"logtail\".*/gem \"logtail\", \"= $CLIENT\"/" Gemfile
+          printf 'gem "msgpack", "= %s"\ngem "logger", "= %s"\n' "$PLANNED_MSGPACK" "$PLANNED_LOGGER" >> Gemfile
+          cat Gemfile
+          bundle install --local
+
+      # What the example runs with, read through bundler from example-project/, where the checkout's lib/ is not on
+      # the load path.
+      - name: "[Verify] Installed versions are the planned ones"
+        working-directory: example-project
+        run: |
+          loaded() { bundle exec ruby -e "print $1"; }
+          RUBY=$(loaded RUBY_VERSION)
+          LOGTAIL=$(loaded 'Gem.loaded_specs.fetch("logtail").version')
+          MSGPACK=$(loaded 'Gem.loaded_specs.fetch("msgpack").version')
+          LOGGER=$(loaded 'Gem.loaded_specs.fetch("logger").version')
+          if [ "$CLIENT_FROM" = checkout ]; then FROM="the gem built here"; else FROM="rubygems.org"; fi
+          mkdir -p ../out
+          echo "- $(loaded RUBY_DESCRIPTION), logtail $LOGTAIL from $FROM, msgpack $MSGPACK, logger $LOGGER" | tee -a ../out/versions.md "$GITHUB_STEP_SUMMARY"
+          FAILED=0
+          # The planned Ruby is a minor (2.3), an exact version (4.0.9) or head, which is a development build.
+          if [ "$PLANNED_RUBY" = head ]; then
+            [ "$(loaded RUBY_PATCHLEVEL)" = -1 ] || { echo "::error::Ruby $RUBY is running, a release, but the $LEG leg plans ruby-head."; FAILED=1; }
+          else
+            case "$RUBY" in
+              "$PLANNED_RUBY" | "$PLANNED_RUBY".*) ;;
+              *) echo "::error::Ruby $RUBY is running, but the $LEG leg plans $PLANNED_RUBY."; FAILED=1 ;;
+            esac
+          fi
+          for check in "logtail $LOGTAIL $CLIENT" "msgpack $MSGPACK $PLANNED_MSGPACK" "logger $LOGGER $PLANNED_LOGGER"; do
+            read -r name got want <<<"$check"
+            if [ "$got" != "$want" ]; then
+              echo "::error::$name $got is installed, but the $LEG leg plans $want."
+              FAILED=1
+            fi
+          done
+          if [ "$CLIENT_FROM" = checkout ]; then
+            # The installed gem is the one built here, byte for byte (rubygems keeps a copy of the .gem it installed),
+            # and holds the checkout's lib/, file for file.
+            if ! cmp -s "../logtail-$CLIENT.gem" "$(loaded 'Gem.loaded_specs.fetch("logtail").cache_file')"; then
+              echo "::error::The installed logtail $LOGTAIL is not the gem built here, logtail-$CLIENT.gem."
+              FAILED=1
+            fi
+            INSTALLED_DIR=$(loaded 'Gem.loaded_specs.fetch("logtail").full_gem_path')
+            if ! diff -r ../lib "$INSTALLED_DIR/lib" > ../out/client.diff; then
+              head -n 20 ../out/client.diff
+              echo "::error::The installed gem's lib/ in $INSTALLED_DIR differs from the checkout's lib/ directory."
+              FAILED=1
+            fi
+          fi
+          exit "$FAILED"
+
+      # Before a source is created: a client that cannot even load with these versions needs no round trip.
+      - name: "[Verify] The client loads with these versions"
+        working-directory: example-project
+        run: |
+          if ! bundle exec ruby -e 'require "logtail"; Logtail::Logger.new(Logtail::LogDevices::HTTP.new("e2e"))' 2> ../out/load.log; then
+            cat ../out/load.log
+            echo "::error::require \"logtail\" failed on Ruby $(ruby -e 'print RUBY_VERSION'): $(head -n 1 ../out/load.log)"
+            exit 1
+          fi
+          # Warnings, if any.
+          cat ../out/load.log
+
+      - name: "[Setup] Create a source"
+        id: source
+        uses: ./.github/actions/create-source
+        with:
+          api-token: ${{ secrets.TEST_TEAM_TELEMETRY_API }}
+          name: e2e-ruby-gh${{ github.run_id }}a${{ github.run_attempt }}-${{ matrix.leg }}
+          platform: ruby
+
+      # The example closes the logger before it prints "All done", which delivers what is still buffered. The client
+      # reports a batch Better Stack rejects with a warning on stderr only, so the job looks for that warning.
+      - name: "[Test] Run the example project"
+        working-directory: example-project
+        env:
+          BETTER_STACK_SOURCE_TOKEN: ${{ steps.source.outputs.token }}
+          BETTER_STACK_INGESTING_HOST: ${{ steps.source.outputs.ingesting-host }}
+        run: |
+          if ! bundle exec ruby main.rb 2>&1 | tee ../out/example.log; then
+            echo "::error::The example project failed: $(tail -n 1 ../out/example.log)"
+            exit 1
+          fi
+          if grep -q '^Logtail: Better Stack rejected' ../out/example.log; then
+            echo "::error::$(grep -m 1 '^Logtail: Better Stack rejected' ../out/example.log)"
+            exit 1
+          fi
+
+      - name: "[Verify] Read the rows back"
+        uses: ./.github/actions/verify-logs
+        with:
+          connection-username: ${{ secrets.TEST_TEAM_CONNECTION_USERNAME }}
+          connection-password: ${{ secrets.TEST_TEAM_CONNECTION_PASSWORD }}
+          connect-host: ${{ steps.source.outputs.connect-host }}
+          collection: ${{ steps.source.outputs.collection }}
+          expected: e2e/expected.json
+
+      - name: "[Cleanup] Delete this job's source and stale ones of earlier runs"
+        if: ${{ always() }}
+        uses: ./.github/actions/cleanup-sources
+        with:
+          api-token: ${{ secrets.TEST_TEAM_TELEMETRY_API }}
+          prefix: e2e-ruby-
+          id: ${{ steps.source.outputs.id }}
+
+      - name: "[Report] Job summary"
+        if: ${{ always() }}
+        run: |
+          if [ -f out/summary.md ]; then
+            { echo; cat out/summary.md; } >> "$GITHUB_STEP_SUMMARY"
+            # The Linear issue names the job and links the run, so it gets the versions, the read-back and the
+            # cleanup only when that left something behind. Without a read-back summary the notifier takes the
+            # job's ::error:: lines instead.
+            mkdir -p report
+            { cat out/versions.md; echo; cat out/summary.md; } > report/summary.md
+            if grep -q '❌' out/cleanup.md 2>/dev/null; then { echo; cat out/cleanup.md; } >> report/summary.md; fi
+          else
+            { echo; echo "❌ Stopped before the rows were read back, see the failed step."; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f out/cleanup.md ]; then { echo; cat out/cleanup.md; } >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: "[Report] Hand the summary to the Linear issue"
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-summary-${{ matrix.name }}
+          path: report/summary.md
+          if-no-files-found: ignore
+          retention-days: 7
+          # A re-run attempt uploads under the same name.
+          overwrite: true
+
+  notify-linear:
+    if: ${{ failure() && (github.ref == 'refs/heads/main' || github.event_name == 'schedule') }}
+    needs: [test]
+    # The notifier reads the failed jobs, their summary artifacts and their annotations.
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    uses: ./.github/workflows/notify_linear_failure.yml
+    with:
+      job_summaries: true
+    secrets: inherit

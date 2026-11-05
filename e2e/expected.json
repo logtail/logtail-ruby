@@ -1,0 +1,27 @@
+[
+  {
+    "level": "debug",
+    "message": "Better Stack is ready!",
+    "contains": {"context": {"runtime": {"file": "main.rb", "frame_label": "<main>"}}}
+  },
+  {
+    "level": "info",
+    "message": "I am using Better Stack!",
+    "contains": {"context": {"runtime": {"file": "main.rb", "frame_label": "<main>"}}}
+  },
+  {
+    "level": "warn",
+    "message": "log structured data",
+    "contains": {"context": {"runtime": {"file": "main.rb", "frame_label": "<main>"}}, "item": {"url": "https://fictional-store.com/item-123", "price": 100.0}}
+  },
+  {
+    "level": "error",
+    "message": "Oops! An error occurred!",
+    "contains": {"context": {"runtime": {"file": "main.rb", "frame_label": "<main>"}}}
+  },
+  {
+    "level": "fatal",
+    "message": "Application crash! Needs to be fixed ASAP!",
+    "contains": {"context": {"runtime": {"file": "main.rb", "frame_label": "<main>"}}, "error": {"class": "ArgumentError", "message": "invalid value for Integer(): \"one hundred\"", "backtrace": ["main.rb:", "<main>"]}}
+  }
+]
