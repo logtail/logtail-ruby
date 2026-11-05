@@ -702,8 +702,9 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
         # seconds or as an HTTP date, at most {MAX_RETRY_AFTER}. 0 without a valid header.
         def retry_after(resp)
           value = resp["Retry-After"].to_s.strip
-          seconds = value.match?(/\A\d+\z/) ? value.to_i : (Time.httpdate(value) - Time.now).ceil
-          seconds.clamp(0, MAX_RETRY_AFTER)
+          # =~, min and max, not match? and clamp: Ruby 2.3, which the gemspec allows, has neither
+          seconds = value =~ /\A\d+\z/ ? value.to_i : (Time.httpdate(value) - Time.now).ceil
+          [[seconds, MAX_RETRY_AFTER].min, 0].max
         rescue ArgumentError
           0
         end
