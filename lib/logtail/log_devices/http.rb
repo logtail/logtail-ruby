@@ -286,7 +286,8 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
           # Entries are encoded one at a time, so one that can't be encoded doesn't lose the batch.
           packer = MessagePack::DefaultFactory.packer
           uncompressed = packer.write_array_header(msgs.size).to_s
-          packer.reset
+          # #clear, not #reset: msgpack before 1.4.5, which the gemspec allows, has only #clear
+          packer.clear
           msgs.each { |msg| uncompressed << encode_log_entry(msg, packer) }
           req.body = Zlib::Deflate.deflate(uncompressed, Zlib::BEST_SPEED)
           req
@@ -307,7 +308,7 @@ Logtail::Config.instance.debug_logger = ::Logger.new(STDOUT)
             message: message.byteslice(0, LogEntry::MESSAGE_MAX_BYTES).scrub(""),
           }.to_msgpack
         ensure
-          packer.reset
+          packer.clear
         end
 
         # Converts what msgpack can't encode, recursively, mostly into strings, and passes strings

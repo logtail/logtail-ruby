@@ -398,6 +398,20 @@ describe Logtail::LogDevices::HTTP do
       expect(delivered_entries[0]["value"]).to eq(value)
     end
 
+    # logtail.gemspec accepts msgpack 1.0.0. Its packers empty themselves with #clear, the name #reset came in 1.4.5.
+    it "delivers with a msgpack packer that has no #reset, as before msgpack 1.4.5" do
+      packer = MessagePack::DefaultFactory.packer
+      packer.singleton_class.send(:undef_method, :reset)
+      allow(MessagePack::DefaultFactory).to receive(:packer).and_return(packer)
+
+      logger.info("line one")
+      logger.info("line two", value: 2)
+
+      entries = delivered_entries
+      expect(entries.map { |entry| entry["message"] }).to eq(["line one", "line two"])
+      expect(entries[1]["value"]).to eq(2)
+    end
+
     it "delivers strings written to the device as info lines" do
       http.write("written to the device\n")
       ::Logger.new(http).warn("logged by a plain Ruby logger")
