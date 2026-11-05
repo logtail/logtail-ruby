@@ -237,6 +237,85 @@ describe Logtail::Logger do
       expect(io.string).to include('"level":"error"')
       expect(io.string).to include('"tags":["tag"]')
     end
+
+    context "with an exception" do
+      let(:exception) do
+        RuntimeError.new("boom").tap do |e|
+          e.set_backtrace(["app/models/order.rb:12:in 'Order#charge'", "app/jobs/charge_job.rb:5:in 'ChargeJob#perform'"])
+        end
+      end
+
+      it "should log a rescued exception as an error event with its backtrace" do
+        begin
+          raise "boom"
+        rescue => e
+          logger.error(e)
+        end
+
+        line = JSON.parse(io.string)
+        expect(line["level"]).to eq("error")
+        expect(line["message"]).to eq("RuntimeError (boom)")
+        expect(line["error"]).to include("name" => "RuntimeError", "message" => "boom")
+        expect(line["error"]["backtrace_json"]).to include("/spec/logtail/logger_spec.rb:")
+        expect(JSON.parse(line["error"]["backtrace_json"])).to eq(e.backtrace)
+      end
+
+      it "should log an exception that was never raised without a backtrace" do
+        logger.error(RuntimeError.new("never raised"))
+
+        line = JSON.parse(io.string)
+        expect(line["message"]).to eq("RuntimeError (never raised)")
+        expect(line["error"]).to eq("name" => "RuntimeError", "message" => "never raised", "backtrace_json" => nil)
+      end
+
+      it "should log an exception returned by a block the same way" do
+        logger.error { exception }
+
+        line = JSON.parse(io.string)
+        expect(line["message"]).to eq("RuntimeError (boom)")
+        expect(line["error"]).to eq(
+          "name" => "RuntimeError",
+          "message" => "boom",
+          "backtrace_json" => %q(["app/models/order.rb:12:in 'Order#charge'","app/jobs/charge_job.rb:5:in 'ChargeJob#perform'"])
+        )
+      end
+
+      it "should log the error event as metadata with the AugmentedFormatter" do
+        logger.formatter = Logtail::Logger::AugmentedFormatter.new
+        logger.error(exception)
+
+        expect(io.string).to start_with(%q(RuntimeError (boom) @metadata {"level":"error",))
+        expect(io.string).to include(%q("error":{"name":"RuntimeError","message":"boom","backtrace_json":"[\"app/models/order.rb:12:in 'Order#charge'\",\"app/jobs/charge_job.rb:5:in 'ChargeJob#perform'\"]"}))
+      end
+
+      it "should log the class and message with the MessageOnlyFormatter" do
+        logger.formatter = Logtail::Logger::MessageOnlyFormatter.new
+        logger.error(exception)
+
+        expect(io.string).to eq("RuntimeError (boom)\n")
+      end
+
+      it "should deliver the error event with the HTTP log device" do
+        http_device = Logtail::LogDevices::HTTP.new("MYKEY", flush_continuously: false)
+        logger = Logtail::Logger.new(http_device)
+
+        logger.error(exception)
+
+        http_device.send(:flush_async)
+        request = http_device.instance_variable_get(:@request_queue).deq.request
+        entries = MessagePack.unpack(Zlib::Inflate.inflate(request.body))
+        expect(entries.size).to eq(1)
+        expect(entries[0]).to include(
+          "level" => "error",
+          "message" => "RuntimeError (boom)",
+          "error" => {
+            "name" => "RuntimeError",
+            "message" => "boom",
+            "backtrace_json" => %q(["app/models/order.rb:12:in 'Order#charge'","app/jobs/charge_job.rb:5:in 'ChargeJob#perform'"])
+          }
+        )
+      end
+    end
   end
 
   describe "#unknown" do
