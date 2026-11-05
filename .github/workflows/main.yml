@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    - cron: '20 5 * * 1'
   workflow_dispatch:
 
 jobs:
@@ -18,7 +16,6 @@ jobs:
       matrix:
         ruby-version:
           - "4.0"
-          - "3"
           - "3.4"
           - "3.3"
           - "3.2"
