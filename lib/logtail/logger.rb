@@ -41,6 +41,11 @@ module Logtail
           level = SEVERITY_MAP.fetch(severity, :unknown)
           tags = extract_active_support_tagged_logging_tags.clone
 
+          if logged_obj.is_a?(::Exception)
+            logged_obj = Events::Error.new(name: logged_obj.class.name, error_message: logged_obj.message,
+                                           backtrace: logged_obj.backtrace)
+          end
+
           if logged_obj.is_a?(Event)
             LogEntry.new(level, time, progname, logged_obj.message, context_snapshot, logged_obj,
                          tags: tags)
